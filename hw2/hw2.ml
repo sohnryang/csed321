@@ -8,7 +8,7 @@ let rec lrevrev l =
   let rec lrev l = match l with [] -> [] | x :: t -> lrev t @ [ x ] in
   match l with [] -> [] | x :: t -> lrevrev t @ [ lrev x ]
 
-let rec lfoldl f e l = match l with [] -> e | x :: t -> lfoldl f (f x e) t
+let rec lfoldl f e l = match l with [] -> e | x :: t -> lfoldl f (f (x, e)) t
 
 (** Tail recursive functions  **)
 
@@ -91,7 +91,7 @@ let rec quicksort l =
   | p :: t ->
       let lo, hi =
         lfoldl
-          (fun x (lo, hi) -> if x < p then (x :: lo, hi) else (lo, x :: hi))
+          (fun (x, (lo, hi)) -> if x < p then (x :: lo, hi) else (lo, x :: hi))
           ([], []) t
       in
       quicksort lo @ [ p ] @ quicksort hi
