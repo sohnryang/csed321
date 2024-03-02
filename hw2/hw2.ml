@@ -64,22 +64,22 @@ let inorder t =
   inorder_aux t []
 
 let postorder t =
-  let rec postorder_rec ts post =
+  let rec postorder_aux ts post =
     match ts with
     | [] -> post
-    | Leaf x :: tt -> postorder_rec tt (x :: post)
-    | Node (l, x, r) :: tt -> postorder_rec (r :: l :: tt) (x :: post)
+    | Leaf x :: tt -> postorder_aux tt (x :: post)
+    | Node (l, x, r) :: tt -> postorder_aux (r :: l :: tt) (x :: post)
   in
-  postorder_rec [ t ] []
+  postorder_aux [ t ] []
 
 let preorder t =
-  let rec preorder_rec ts post =
+  let rec preorder_aux ts post =
     match ts with
     | [] -> post
-    | Leaf x :: tt -> preorder_rec tt (post @ [ x ])
-    | Node (l, x, r) :: tt -> preorder_rec (l :: r :: tt) (post @ [ x ])
+    | Leaf x :: tt -> preorder_aux tt (post @ [ x ])
+    | Node (l, x, r) :: tt -> preorder_aux (l :: r :: tt) (post @ [ x ])
   in
-  preorder_rec [ t ] []
+  preorder_aux [ t ] []
 
 (** Sorting in the ascending order **)
 
