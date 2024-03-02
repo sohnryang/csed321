@@ -21,20 +21,18 @@ let fib n =
   fib_aux n 0 1
 
 let alterSum l =
-  let rec alterSum_aux l acc neg =
+  let rec alterSum_aux l acc coeff =
     match l with
     | [] -> acc
-    | x :: t ->
-        if neg then alterSum_aux t (acc - x) false
-        else alterSum_aux t (acc + x) true
+    | x :: t -> alterSum_aux t (acc + (coeff * x)) (-coeff)
   in
-  alterSum_aux l 0 false
+  alterSum_aux l 0 1
 
 let ltabulate n f =
   let rec ltabulate_aux n f l =
-    if n = 0 then l else ltabulate_aux (n - 1) f (f n :: l)
+    if n < 0 then l else ltabulate_aux (n - 1) f (f n :: l)
   in
-  ltabulate_aux n f []
+  ltabulate_aux (n - 1) f []
 
 let lfilter p l =
   let rec lfilter_aux p l fl =
