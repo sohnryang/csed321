@@ -171,7 +171,7 @@ module Distance : SCALAR with type t = int = struct
   let one = 0
 
   let ( ++ ) x y =
-    match (x, y) with -1, _ -> y | _, -1 -> x | _ -> Int.min x y
+    match (x, y) with -1, _ -> y | _, -1 -> x | _ -> if x < y then x else y
 
   let ( ** ) x y = if x = -1 || y = -1 then -1 else x + y
   let ( == ) x y = x = y
@@ -214,14 +214,14 @@ module Weight : SCALAR with type t = int = struct
 
   let zero = 0
   let one = -1
-  let ( ++ ) x y = if x = -1 || y = -1 then -1 else Int.max x y
+  let ( ++ ) x y = if x = -1 || y = -1 then -1 else if x > y then x else y
 
   let ( ** ) x y =
     match (x, y) with
     | 0, _ | _, 0 -> 0
     | -1, _ -> y
     | _, -1 -> x
-    | _ -> Int.min x y
+    | _ -> if x < y then x else y
 
   let ( == ) x y = x = y
 end
