@@ -97,24 +97,25 @@ module MatrixFn (Scal : SCALAR) : MATRIX with type elem = Scal.t = struct
     in
     match List.nth_opt row c with Some e -> e | None -> raise MatrixIllegal
 
+  module ScalVector = VectorFn (Scal)
+
   let ( ++ ) x y =
-    let open VectorFn (Scal) in
-    try List.map2 (fun v w -> to_list (create v ++ create w)) x y
-    with VectorIllegal -> raise MatrixIllegal
+    try List.map2 (fun v w -> ScalVector.(to_list (create v ++ create w))) x y
+    with ScalVector.VectorIllegal -> raise MatrixIllegal
 
   let ( ** ) x y =
-    let open VectorFn (Scal) in
     try
       List.map
         (fun r ->
-          List.map (fun c -> innerp (create r) (create c)) (transpose y))
+          List.map
+            (fun c -> ScalVector.(innerp (create r) (create c)))
+            (transpose y))
         x
-    with VectorIllegal -> raise MatrixIllegal
+    with ScalVector.VectorIllegal -> raise MatrixIllegal
 
   let ( == ) x y =
-    let open VectorFn (Scal) in
-    try List.for_all2 (fun v w -> create v == create w) x y
-    with VectorIllegal -> raise MatrixIllegal
+    try List.for_all2 (fun v w -> ScalVector.(create v == create w)) x y
+    with ScalVector.VectorIllegal -> raise MatrixIllegal
 end
 
 (* Problem 2-1 *)
