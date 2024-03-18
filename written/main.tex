@@ -132,8 +132,10 @@ Finally, let's consider \AxiomC{\(s_1\; \mathsf{mparen}\)} \AxiomC{\(s_2\;
 \mathsf{mparen}\)} \RightLabel{\(Mseq\)} \BinaryInfC{\(s_1 s_2\;
 \mathsf{mparen}\)} \DisplayProof where \(s = s_1 s_2\).
 \begin{flalign}
-&s_1\; \mathsf{tparen}& \tag*{by the induction hypothesis on \(s_1\; \mathsf{mparen}\)} \\
-&s_2\; \mathsf{tparen}& \tag*{by the induction hypothesis on \(s_2\; \mathsf{mparen}\)} \\
+&s_1\; \mathsf{tparen}& \tag*{by the induction hypothesis on \(s_1\;
+\mathsf{mparen}\)} \\
+&s_2\; \mathsf{tparen}& \tag*{by the induction hypothesis on \(s_2\;
+\mathsf{mparen}\)} \\
 &s_1 s_2\; \mathsf{tparen}& \tag*{by Lemma~1.2}
 \end{flalign}
 \end{proof}
