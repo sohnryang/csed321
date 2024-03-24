@@ -52,16 +52,12 @@ let rec substitute expr var value =
  *)
 let rec stepv e =
   match e with
-  | Uml.Var _ -> raise Stuck
-  | Uml.Lam _ -> raise Stuck
   | Uml.App (e1, e2) -> (
-      match e2 with
-      | Uml.Lam _ -> (
-          match e1 with
-          | Uml.Var _ -> raise Stuck
-          | Uml.Lam (bvar, lexpr) -> substitute lexpr bvar e2
-          | Uml.App _ -> Uml.App (stepv e1, e2))
-      | _ -> Uml.App (e1, stepv e2))
+      match e1 with
+      | Uml.Lam (bvar, lexpr) -> (
+          try Uml.App (e1, stepv e2) with Stuck -> substitute lexpr bvar e2)
+      | _ -> Uml.App (stepv e1, e2))
+  | _ -> raise Stuck
 
 let stepOpt stepf e = try Some (stepf e) with Stuck -> None
 let rec multiStep stepf e = try multiStep stepf (stepf e) with Stuck -> e
