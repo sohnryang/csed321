@@ -55,7 +55,11 @@ let rec stepv e =
   | Uml.App (e1, e2) -> (
       match e1 with
       | Uml.Lam (bvar, lexpr) -> (
-          try Uml.App (e1, stepv e2) with Stuck -> substitute lexpr bvar e2)
+          try Uml.App (e1, stepv e2)
+          with Stuck -> (
+            match e2 with
+            | Uml.Lam _ -> substitute lexpr bvar e2
+            | _ -> raise Stuck))
       | _ -> Uml.App (stepv e1, e2))
   | _ -> raise Stuck
 
