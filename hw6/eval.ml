@@ -24,27 +24,20 @@ let emptyEnv = ()
  *           you wiil receive no credit for the entire third part! *)
 let value2exp _ = raise NotImplemented
 
-module NameMap = Map.Make (String)
-
-type namecontext = index NameMap.t
-
 module NameSet = Set.Make (String)
-
-type boundvarset = NameSet.t
 
 (* Problem 1. 
  * texp2exp : Tml.texp -> Tml.exp *)
 let texp2exp te =
-  let pushFreeVar name_ls fv =
-    fv :: List.filter (fun name -> name <> fv) name_ls
-  in
+  let removeFreeVar name_ls v = List.filter (fun name -> name <> v) name_ls in
+  let pushFreeVar name_ls fv = fv :: removeFreeVar name_ls fv in
   let rec collectFreeVar te name_ls bv_set =
     match te with
     | Tvar v ->
         if Option.is_some (NameSet.find_opt v bv_set) then name_ls
         else pushFreeVar name_ls v
     | Tlam (bv, _, lam_te) ->
-        collectFreeVar lam_te name_ls (NameSet.add bv bv_set)
+        removeFreeVar (collectFreeVar lam_te name_ls (NameSet.add bv bv_set)) bv
     | Tapp (abs_te, arg_te) ->
         let abs_name_ctx = collectFreeVar abs_te name_ls bv_set in
         collectFreeVar arg_te abs_name_ctx bv_set
@@ -56,11 +49,15 @@ let texp2exp te =
     | Tcase (te', inl_bv, inl_te, inr_bv, inr_te) ->
         let name_ctx' = collectFreeVar te' name_ls bv_set in
         let inl_name_ctx =
-          collectFreeVar inl_te name_ctx' (NameSet.add inl_bv bv_set)
+          removeFreeVar
+            (collectFreeVar inl_te name_ctx' (NameSet.add inl_bv bv_set))
+            inl_bv
         in
-        collectFreeVar inr_te inl_name_ctx (NameSet.add inr_bv bv_set)
+        removeFreeVar
+          (collectFreeVar inr_te inl_name_ctx (NameSet.add inr_bv bv_set))
+          inr_bv
     | Tfix (bv, _, fix_te) ->
-        collectFreeVar fix_te name_ls (NameSet.add bv bv_set)
+        removeFreeVar (collectFreeVar fix_te name_ls (NameSet.add bv bv_set)) bv
     | Tifthenelse (cond_te, then_te, else_te) ->
         let cond_name_ctx = collectFreeVar cond_te name_ls bv_set in
         let then_name_ctx = collectFreeVar then_te cond_name_ctx bv_set in
@@ -69,11 +66,18 @@ let texp2exp te =
   in
   let name_ls = collectFreeVar te [] NameSet.empty in
   let pushBinder name_ctx bv =
-    NameMap.add bv 0 (NameMap.map Int.succ name_ctx)
+    (bv, 0) :: List.map (fun (v, i) -> (v, i + 1)) name_ctx
   in
   let rec texp2exp' te name_ctx =
     match te with
-    | Tvar v -> Ind (NameMap.find v name_ctx)
+    | Tvar v ->
+        let indices =
+          List.map snd (List.filter (fun (v', _) -> v' = v) name_ctx)
+        in
+        Ind
+          (List.fold_left
+             (fun x y -> if x < y then x else y)
+             (List.hd indices) indices)
     | Tlam (bv, _, lam_te) -> Lam (texp2exp' lam_te (pushBinder name_ctx bv))
     | Tapp (abs_te, arg_te) ->
         App (texp2exp' abs_te name_ctx, texp2exp' arg_te name_ctx)
@@ -102,12 +106,7 @@ let texp2exp te =
     | Tminus -> Minus
     | Teq -> Eq
   in
-  let name_ctx =
-    List.fold_left
-      (fun m (i, v) -> NameMap.add v i m)
-      NameMap.empty
-      (List.mapi (fun i v -> (i, v)) name_ls)
-  in
+  let name_ctx = List.mapi (fun i v -> (v, i)) name_ls in
   texp2exp' te name_ctx
 
 (* Problem 2. 
