@@ -111,7 +111,100 @@ let texp2exp te =
 
 (* Problem 2. 
  * step1 : Tml.exp -> Tml.exp *)
-let rec step1 _ = raise Stuck
+let rec step1 te =
+  let rec shift v bv te =
+    match te with
+    | Ind v' -> if v' >= bv then Ind (v' + v) else Ind v'
+    | Lam lam_te -> Lam (shift v (bv + 1) lam_te)
+    | App (abs_te, arg_te) -> App (shift v bv abs_te, shift v bv arg_te)
+    | Pair (fst_te, snd_te) -> Pair (shift v bv fst_te, shift v bv snd_te)
+    | Fst inner_te -> Fst (shift v bv inner_te)
+    | Snd inner_te -> Snd (shift v bv inner_te)
+    | Inl inner_te -> Inl (shift v bv inner_te)
+    | Inr inner_te -> Inr (shift v bv inner_te)
+    | Case (case_te, inl_te, inr_te) ->
+        Case
+          (shift v bv case_te, shift v (bv + 1) inl_te, shift v (bv + 1) inr_te)
+    | Fix fix_te -> Fix (shift v (bv + 1) fix_te)
+    | Ifthenelse (cond_te, then_te, else_te) ->
+        Ifthenelse (shift v bv cond_te, shift v bv then_te, shift v bv else_te)
+    | Eunit | True | False | Num _ | Plus | Minus | Eq -> te
+  in
+  let rec substitute te v te' =
+    match te with
+    | Ind v' ->
+        if v' < v then Ind v' else if v' = v then shift v 0 te' else Ind (v' - 1)
+    | Lam lam_te -> Lam (substitute lam_te (v + 1) te')
+    | App (abs_te, arg_te) ->
+        App (substitute abs_te v te', substitute arg_te v te')
+    | Pair (fst_te, snd_te) ->
+        Pair (substitute fst_te v te', substitute snd_te v te')
+    | Fst inner_te -> Fst (substitute inner_te v te')
+    | Snd inner_te -> Snd (substitute inner_te v te')
+    | Inl inner_te -> Inl (substitute inner_te v te')
+    | Inr inner_te -> Inr (substitute inner_te v te')
+    | Case (case_te, inl_te, inr_te) ->
+        Case
+          ( substitute case_te v te',
+            substitute inl_te (v + 1) te',
+            substitute inr_te (v + 1) te' )
+    | Fix fix_te -> Fix (substitute fix_te (v + 1) te')
+    | Ifthenelse (cond_te, then_te, else_te) ->
+        Ifthenelse
+          ( substitute cond_te v te',
+            substitute then_te v te',
+            substitute else_te v te' )
+    | Eunit | True | False | Num _ | Plus | Minus | Eq -> te
+  in
+  match te with
+  | Ind _ -> raise Stuck
+  | Lam _ -> raise Stuck
+  | App (abs_te, arg_te) -> (
+      try App (step1 abs_te, arg_te)
+      with Stuck -> (
+        try App (abs_te, step1 arg_te)
+        with Stuck -> (
+          match (abs_te, arg_te) with
+          | Lam lam_te, _ -> substitute lam_te 0 arg_te
+          | Plus, Pair (Num lhs, Num rhs) -> Num (lhs + rhs)
+          | Minus, Pair (Num lhs, Num rhs) ->
+              if lhs < rhs then Num 0 else Num (lhs - rhs)
+          | Eq, Pair (Num lhs, Num rhs) -> if lhs = rhs then True else False
+          | _ -> raise Stuck)))
+  | Pair (fst_te, snd_te) -> (
+      try Pair (step1 fst_te, snd_te) with Stuck -> Pair (fst_te, step1 snd_te))
+  | Fst te' -> (
+      try Fst (step1 te')
+      with Stuck -> (
+        match te' with Pair (fst_te, _) -> fst_te | _ -> raise Stuck))
+  | Snd te' -> (
+      try Snd (step1 te')
+      with Stuck -> (
+        match te' with Pair (_, snd_te) -> snd_te | _ -> raise Stuck))
+  | Eunit -> raise Stuck
+  | Inl te' -> ( try Inl (step1 te') with Stuck -> Inl te')
+  | Inr te' -> ( try Inr (step1 te') with Stuck -> Inr te')
+  | Case (case_te, inl_te, inr_te) -> (
+      try Case (step1 case_te, inl_te, inr_te)
+      with Stuck -> (
+        match case_te with
+        | Inl inl_val -> substitute inl_te 0 inl_val
+        | Inr inr_val -> substitute inr_te 0 inr_val
+        | _ -> raise Stuck))
+  | Fix fix_te -> substitute fix_te 0 te
+  | True -> raise Stuck
+  | False -> raise Stuck
+  | Ifthenelse (cond_te, then_te, else_te) -> (
+      try Ifthenelse (step1 cond_te, then_te, else_te)
+      with Stuck -> (
+        match cond_te with
+        | True -> then_te
+        | False -> else_te
+        | _ -> raise Stuck))
+  | Num _ -> raise Stuck
+  | Plus -> raise Stuck
+  | Minus -> raise Stuck
+  | Eq -> raise Stuck
 
 (* Problem 3. 
  * step2 : state -> state *)
