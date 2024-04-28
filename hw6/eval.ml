@@ -71,9 +71,10 @@ let texp2exp te =
   let pushFreeVar name_ls fv = fv :: removeFreeVar name_ls fv in
   let rec collectFreeVar te name_ls bv_set =
     match te with
-    | Tvar v ->
-        if Option.is_some (NameSet.find_opt v bv_set) then name_ls
-        else pushFreeVar name_ls v
+    | Tvar v -> (
+        match NameSet.find_opt v bv_set with
+        | Some _ -> name_ls
+        | None -> pushFreeVar name_ls v)
     | Tlam (bv, _, lam_te) ->
         removeFreeVar (collectFreeVar lam_te name_ls (NameSet.add bv bv_set)) bv
     | Tapp (abs_te, arg_te) ->
