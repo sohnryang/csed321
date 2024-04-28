@@ -182,8 +182,8 @@ let rec step1 te =
       with Stuck -> (
         match te' with Pair (_, snd_te) -> snd_te | _ -> raise Stuck))
   | Eunit -> raise Stuck
-  | Inl te' -> ( try Inl (step1 te') with Stuck -> Inl te')
-  | Inr te' -> ( try Inr (step1 te') with Stuck -> Inr te')
+  | Inl te' -> Inl (step1 te')
+  | Inr te' -> Inr (step1 te')
   | Case (case_te, inl_te, inr_te) -> (
       try Case (step1 case_te, inl_te, inr_te)
       with Stuck -> (
