@@ -257,15 +257,18 @@ let step2 st =
   | Anal_ST (heap, eval_stack, te, eval_env) -> (
       match te with
       | Ind v -> (
-          let heap_index = IndexMap.find v eval_env in
-          match Heap.deref heap heap_index with
-          | Computed computed_val -> Return_ST (heap, eval_stack, computed_val)
-          | Delayed (delayed_te, delayed_env) ->
-              Anal_ST
-                ( heap,
-                  Frame_SK (eval_stack, Heap_ref heap_index),
-                  delayed_te,
-                  delayed_env ))
+          match IndexMap.find_opt v eval_env with
+          | Some heap_index -> (
+              match Heap.deref heap heap_index with
+              | Computed computed_val ->
+                  Return_ST (heap, eval_stack, computed_val)
+              | Delayed (delayed_te, delayed_env) ->
+                  Anal_ST
+                    ( heap,
+                      Frame_SK (eval_stack, Heap_ref heap_index),
+                      delayed_te,
+                      delayed_env ))
+          | None -> raise Stuck)
       | Lam _ -> Return_ST (heap, eval_stack, Closure (eval_env, te))
       | App (abs_te, arg_te) ->
           Anal_ST
