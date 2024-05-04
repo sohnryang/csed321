@@ -13,7 +13,7 @@ end
 module Constructor = struct
   type t = {
     name : typ;
-    ctor_params : Param.t list;
+    params : Param.t list;
     super_args : string list;
     assignments : (string * string) list;
   }
@@ -49,7 +49,7 @@ let convert_classes class_decls =
     let name, params, super_args, assignments = constructor_decl in
     {
       Constructor.name;
-      ctor_params = convert_params params;
+      params = convert_params params;
       super_args;
       assignments;
     }
@@ -88,12 +88,7 @@ let convert_classes class_decls =
          super_name = "Object";
          fields = NameMap.empty;
          constructor =
-           {
-             name = "Object";
-             ctor_params = [];
-             super_args = [];
-             assignments = [];
-           };
+           { name = "Object"; params = []; super_args = []; assignments = [] };
          methods = NameMap.empty;
        }
        NameMap.empty)
@@ -151,7 +146,7 @@ let typeOf p =
         else raise TypeError
     | New (new_t, args) ->
         let new_t_decl = find_type_error new_t table in
-        let params = new_t_decl.constructor.ctor_params in
+        let params = new_t_decl.constructor.params in
         if List.length params <> List.length args then raise TypeError
         else if
           List.for_all
@@ -188,7 +183,7 @@ let typeOf p =
     let super_decl = find_type_error decl.super_name table in
     if decl.name <> constructor.name then false
     else if
-      List.length super_decl.constructor.ctor_params
+      List.length super_decl.constructor.params
       <> List.length constructor.super_args
     then false
     else if
@@ -196,15 +191,13 @@ let typeOf p =
         (fun (super_param, arg) ->
           let arg_t =
             match
-              List.find_opt
-                (fun p -> arg = p.Param.name)
-                constructor.ctor_params
+              List.find_opt (fun p -> arg = p.Param.name) constructor.params
             with
             | Some p -> p.t
             | None -> raise TypeError
           in
           is_subtype arg_t super_param.Param.t = false)
-        (List.combine super_decl.constructor.ctor_params constructor.super_args)
+        (List.combine super_decl.constructor.params constructor.super_args)
     then false
     else if
       List.exists
@@ -212,9 +205,7 @@ let typeOf p =
           let lhs_t = find_type_error lhs decl.fields in
           let rhs_t =
             match
-              List.find_opt
-                (fun p -> rhs = p.Param.name)
-                constructor.ctor_params
+              List.find_opt (fun p -> rhs = p.Param.name) constructor.params
             with
             | Some p -> p.t
             | None -> raise TypeError
