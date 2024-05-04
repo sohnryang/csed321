@@ -61,6 +61,22 @@ module ClassTable = struct
     else
       let lhs_decl = NameMap.find lhs table in
       is_subtype table lhs_decl.Class.super_name rhs
+
+  let rec field_owner table t field =
+    if t = "Object" then raise TypeError
+    else
+      let decl = NameMap.find t table in
+      match NameMap.find_opt field decl.Class.fields with
+      | Some _ -> decl
+      | None -> field_owner table decl.super_name field
+
+  let rec method_owner table t method_name =
+    if t = "Object" then raise TypeError
+    else
+      let decl = NameMap.find t table in
+      match NameMap.find_opt method_name decl.Class.methods with
+      | Some _ -> decl
+      | None -> method_owner table decl.super_name method_name
 end
 
 type class_table = Class.t NameMap.t
@@ -123,32 +139,16 @@ let convert_classes class_decls =
 let typeOf p =
   let class_decls, expr = p in
   let table = convert_classes class_decls in
-  let rec lookup_field_owner t field =
-    if t = "Object" then raise TypeError
-    else
-      let decl = NameMap.find t table in
-      match NameMap.find_opt field decl.fields with
-      | Some _ -> decl
-      | None -> lookup_field_owner decl.super_name field
-  in
-  let rec lookup_method_owner t method_name =
-    if t = "Object" then raise TypeError
-    else
-      let decl = NameMap.find t table in
-      match NameMap.find_opt method_name decl.methods with
-      | Some _ -> decl
-      | None -> lookup_method_owner decl.super_name method_name
-  in
   let rec resolve_type type_ctx expr =
     match expr with
     | Var v -> NameMap.find v type_ctx
     | Field (expr, field_name) ->
         let expr_t = resolve_type type_ctx expr in
-        let field_owner = lookup_field_owner expr_t field_name in
+        let field_owner = ClassTable.field_owner table expr_t field_name in
         NameMap.find field_name field_owner.fields
     | Method (expr, method_name, args) ->
         let expr_t = resolve_type type_ctx expr in
-        let method_owner = lookup_method_owner expr_t method_name in
+        let method_owner = ClassTable.method_owner table expr_t method_name in
         let method_decl = NameMap.find method_name method_owner.methods in
         if List.length method_decl.params <> List.length args then
           raise TypeError
