@@ -52,6 +52,17 @@ module ReducedExpr = struct
     else Cast (rexp.casted_t, New (rexp.new_t, rexp.new_args))
 end
 
+module ClassTable = struct
+  type t = Class.t NameMap.t
+
+  let rec is_subtype table lhs rhs =
+    if lhs = rhs then true
+    else if lhs = "Object" then false
+    else
+      let lhs_decl = NameMap.find lhs table in
+      is_subtype table lhs_decl.Class.super_name rhs
+end
+
 type class_table = Class.t NameMap.t
 type typing_context = typ NameMap.t
 type eval_context = ReducedExpr.t NameMap.t
@@ -112,13 +123,6 @@ let convert_classes class_decls =
 let typeOf p =
   let class_decls, expr = p in
   let table = convert_classes class_decls in
-  let rec is_subtype lhs rhs =
-    if lhs = rhs then true
-    else if lhs = "Object" then false
-    else
-      let lhs_decl = NameMap.find lhs table in
-      is_subtype lhs_decl.Class.super_name rhs
-  in
   let rec lookup_field_owner t field =
     if t = "Object" then raise TypeError
     else
@@ -152,7 +156,7 @@ let typeOf p =
           List.for_all
             (fun (param, arg) ->
               let arg_t = resolve_type type_ctx arg in
-              is_subtype arg_t param.Param.t)
+              ClassTable.is_subtype table arg_t param.Param.t)
             (List.combine method_decl.params args)
         then method_decl.return_type
         else raise TypeError
@@ -164,7 +168,7 @@ let typeOf p =
           List.for_all
             (fun (param, arg) ->
               let arg_t = resolve_type type_ctx arg in
-              is_subtype arg_t param.Param.t)
+              ClassTable.is_subtype table arg_t param.Param.t)
             (List.combine params args)
         then new_t
         else raise TypeError
@@ -172,8 +176,8 @@ let typeOf p =
         let casted_t = resolve_type type_ctx casted_expr in
         let () =
           if
-            is_subtype new_t casted_t = false
-            && is_subtype casted_t new_t = false
+            ClassTable.is_subtype table new_t casted_t = false
+            && ClassTable.is_subtype table casted_t new_t = false
           then print_endline "Stupid Warning"
           else ()
         in
@@ -185,7 +189,7 @@ let typeOf p =
         (NameMap.add "this" base_class NameMap.empty)
         method_decl.Method.params
     in
-    is_subtype
+    ClassTable.is_subtype table
       (resolve_type type_ctx method_decl.return_exp)
       method_decl.return_type
   in
@@ -206,7 +210,7 @@ let typeOf p =
              with Not_found -> raise TypeError)
               .t
           in
-          is_subtype arg_t super_param.Param.t = false)
+          ClassTable.is_subtype table arg_t super_param.Param.t = false)
         (List.combine super_decl.constructor.params constructor.super_args)
     then false
     else if
@@ -218,7 +222,7 @@ let typeOf p =
              with Not_found -> raise TypeError)
               .t
           in
-          is_subtype rhs_t lhs_t = false)
+          ClassTable.is_subtype table rhs_t lhs_t = false)
         constructor.assignments
     then false
     else if
