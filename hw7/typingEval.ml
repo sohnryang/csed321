@@ -79,7 +79,6 @@ module ClassTable = struct
       | None -> method_owner table decl.super_name method_name
 end
 
-type class_table = Class.t NameMap.t
 type typing_context = typ NameMap.t
 type eval_context = ReducedExpr.t NameMap.t
 
