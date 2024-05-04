@@ -113,17 +113,33 @@ let typeOf p =
       let lhs_decl = find_type_error lhs table in
       is_subtype lhs_decl.Class.super_name rhs
   in
+  let rec lookup_field_owner t field =
+    if t = "Object" then raise TypeError
+    else
+      let decl = find_type_error t table in
+      match NameMap.find_opt field decl.fields with
+      | Some _ -> decl
+      | None -> lookup_field_owner decl.super_name field
+  in
+  let rec lookup_method_owner t method_name =
+    if t = "Object" then raise TypeError
+    else
+      let decl = find_type_error t table in
+      match NameMap.find_opt method_name decl.methods with
+      | Some _ -> decl
+      | None -> lookup_method_owner decl.super_name method_name
+  in
   let rec resolve_type type_ctx expr =
     match expr with
     | Var v -> find_type_error v type_ctx
     | Field (expr, field_name) ->
         let expr_t = resolve_type type_ctx expr in
-        let expr_t_decl = find_type_error expr_t table in
-        find_type_error field_name expr_t_decl.fields
+        let field_owner = lookup_field_owner expr_t field_name in
+        find_type_error field_name field_owner.fields
     | Method (expr, method_name, args) ->
         let expr_t = resolve_type type_ctx expr in
-        let expr_t_decl = find_type_error expr_t table in
-        let method_decl = find_type_error method_name expr_t_decl.methods in
+        let method_owner = lookup_method_owner expr_t method_name in
+        let method_decl = find_type_error method_name method_owner.methods in
         if List.length method_decl.params <> List.length args then
           raise TypeError
         else if
