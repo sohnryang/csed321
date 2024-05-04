@@ -4,7 +4,13 @@ exception NotImplemented
 exception TypeError
 exception Stuck
 
-module NameMap = Map.Make (String)
+module NameMap' = Map.Make (String)
+
+module NameMap = struct
+  include NameMap'
+
+  let find name m = try NameMap'.find name m with Not_found -> raise TypeError
+end
 
 module Param = struct
   type t = { name : string; t : typ }
@@ -106,20 +112,17 @@ let convert_classes class_decls =
 let typeOf p =
   let class_decls, expr = p in
   let table = convert_classes class_decls in
-  let find_type_error name map =
-    try NameMap.find name map with Not_found -> raise TypeError
-  in
   let rec is_subtype lhs rhs =
     if lhs = rhs then true
     else if lhs = "Object" then false
     else
-      let lhs_decl = find_type_error lhs table in
+      let lhs_decl = NameMap.find lhs table in
       is_subtype lhs_decl.Class.super_name rhs
   in
   let rec lookup_field_owner t field =
     if t = "Object" then raise TypeError
     else
-      let decl = find_type_error t table in
+      let decl = NameMap.find t table in
       match NameMap.find_opt field decl.fields with
       | Some _ -> decl
       | None -> lookup_field_owner decl.super_name field
@@ -127,22 +130,22 @@ let typeOf p =
   let rec lookup_method_owner t method_name =
     if t = "Object" then raise TypeError
     else
-      let decl = find_type_error t table in
+      let decl = NameMap.find t table in
       match NameMap.find_opt method_name decl.methods with
       | Some _ -> decl
       | None -> lookup_method_owner decl.super_name method_name
   in
   let rec resolve_type type_ctx expr =
     match expr with
-    | Var v -> find_type_error v type_ctx
+    | Var v -> NameMap.find v type_ctx
     | Field (expr, field_name) ->
         let expr_t = resolve_type type_ctx expr in
         let field_owner = lookup_field_owner expr_t field_name in
-        find_type_error field_name field_owner.fields
+        NameMap.find field_name field_owner.fields
     | Method (expr, method_name, args) ->
         let expr_t = resolve_type type_ctx expr in
         let method_owner = lookup_method_owner expr_t method_name in
-        let method_decl = find_type_error method_name method_owner.methods in
+        let method_decl = NameMap.find method_name method_owner.methods in
         if List.length method_decl.params <> List.length args then
           raise TypeError
         else if
@@ -154,7 +157,7 @@ let typeOf p =
         then method_decl.return_type
         else raise TypeError
     | New (new_t, args) ->
-        let new_t_decl = find_type_error new_t table in
+        let new_t_decl = NameMap.find new_t table in
         let params = new_t_decl.constructor.params in
         if List.length params <> List.length args then raise TypeError
         else if
@@ -187,9 +190,9 @@ let typeOf p =
       method_decl.return_type
   in
   let check_class name =
-    let decl = find_type_error name table in
+    let decl = NameMap.find name table in
     let constructor = decl.Class.constructor in
-    let super_decl = find_type_error decl.super_name table in
+    let super_decl = NameMap.find decl.super_name table in
     if decl.name <> constructor.name then false
     else if
       List.length super_decl.constructor.params
@@ -209,7 +212,7 @@ let typeOf p =
     else if
       List.exists
         (fun (lhs, rhs) ->
-          let lhs_t = find_type_error lhs decl.fields in
+          let lhs_t = NameMap.find lhs decl.fields in
           let rhs_t =
             (try List.find (fun p -> rhs = p.Param.name) constructor.params
              with Not_found -> raise TypeError)
@@ -221,7 +224,7 @@ let typeOf p =
     else if
       NameMap.exists
         (fun method_name super_method_decl ->
-          let method_decl = find_type_error method_name decl.methods in
+          let method_decl = NameMap.find method_name decl.methods in
           List.map (fun p -> p.Param.t) super_method_decl.Method.params
           <> List.map (fun p -> p.Param.t) method_decl.params
           || super_method_decl.return_type <> method_decl.return_type)
