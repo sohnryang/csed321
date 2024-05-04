@@ -45,11 +45,12 @@ module Class = struct
 end
 
 module ReducedExpr = struct
-  type t = { casted_t : typ; new_t : typ; new_args : exp list }
+  type t = { casted_t : typ; new_t : typ; new_args : t list }
 
-  let to_exp rexp =
-    if rexp.casted_t = rexp.new_t then New (rexp.new_t, rexp.new_args)
-    else Cast (rexp.casted_t, New (rexp.new_t, rexp.new_args))
+  let rec to_exp rexp =
+    let new_expr = New (rexp.new_t, List.map to_exp rexp.new_args) in
+    if rexp.casted_t = rexp.new_t then new_expr
+    else Cast (rexp.casted_t, new_expr)
 end
 
 module ClassTable = struct
