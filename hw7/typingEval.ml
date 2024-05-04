@@ -41,7 +41,7 @@ end
 type class_table = Class.t NameMap.t
 type typing_context = typ NameMap.t
 
-let typeOf p =
+let convert_classes class_decls =
   let convert_params params =
     List.map (fun (t, name) -> { Param.name; t }) params
   in
@@ -78,31 +78,30 @@ let typeOf p =
       methods = convert_methods methods;
     }
   in
-  let convert_classes class_decls =
-    List.fold_left
-      (fun acc class_decl ->
-        let converted = convert_class class_decl in
-        NameMap.add converted.name converted acc)
-      NameMap.empty class_decls
-  in
+  List.fold_left
+    (fun acc class_decl ->
+      let converted = convert_class class_decl in
+      NameMap.add converted.name converted acc)
+    (NameMap.add "Object"
+       {
+         Class.name = "Object";
+         super_name = "Object";
+         fields = NameMap.empty;
+         constructor =
+           {
+             name = "Object";
+             ctor_params = [];
+             super_args = [];
+             assignments = [];
+           };
+         methods = NameMap.empty;
+       }
+       NameMap.empty)
+    class_decls
+
+let typeOf p =
   let class_decls, expr = p in
-  let table =
-    NameMap.add "Object"
-      {
-        Class.name = "Object";
-        super_name = "Object";
-        fields = NameMap.empty;
-        constructor =
-          {
-            name = "Object";
-            ctor_params = [];
-            super_args = [];
-            assignments = [];
-          };
-        methods = NameMap.empty;
-      }
-      (convert_classes class_decls)
-  in
+  let table = convert_classes class_decls in
   let find_type_error name map =
     try NameMap.find name map with Not_found -> raise TypeError
   in
