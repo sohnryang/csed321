@@ -38,8 +38,17 @@ module Class = struct
   }
 end
 
+module ReducedExpr = struct
+  type t = { casted_t : typ; new_t : typ; new_args : exp list }
+
+  let to_exp rexp =
+    if rexp.casted_t = rexp.new_t then New (rexp.new_t, rexp.new_args)
+    else Cast (rexp.casted_t, New (rexp.new_t, rexp.new_args))
+end
+
 type class_table = Class.t NameMap.t
 type typing_context = typ NameMap.t
+type eval_context = ReducedExpr.t NameMap.t
 
 let convert_classes class_decls =
   let convert_params params =
