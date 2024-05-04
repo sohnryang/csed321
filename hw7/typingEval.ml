@@ -190,11 +190,9 @@ let typeOf p =
       List.exists
         (fun (super_param, arg) ->
           let arg_t =
-            match
-              List.find_opt (fun p -> arg = p.Param.name) constructor.params
-            with
-            | Some p -> p.t
-            | None -> raise TypeError
+            (try List.find (fun p -> arg = p.Param.name) constructor.params
+             with Not_found -> raise TypeError)
+              .t
           in
           is_subtype arg_t super_param.Param.t = false)
         (List.combine super_decl.constructor.params constructor.super_args)
@@ -204,11 +202,9 @@ let typeOf p =
         (fun (lhs, rhs) ->
           let lhs_t = find_type_error lhs decl.fields in
           let rhs_t =
-            match
-              List.find_opt (fun p -> rhs = p.Param.name) constructor.params
-            with
-            | Some p -> p.t
-            | None -> raise TypeError
+            (try List.find (fun p -> rhs = p.Param.name) constructor.params
+             with Not_found -> raise TypeError)
+              .t
           in
           is_subtype rhs_t lhs_t = false)
         constructor.assignments
