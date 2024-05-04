@@ -108,6 +108,7 @@ let typeOf p =
   in
   let rec is_subtype lhs rhs =
     if lhs = rhs then true
+    else if lhs = "Object" then false
     else
       let lhs_decl = find_type_error lhs table in
       is_subtype lhs_decl.Class.super_name rhs
