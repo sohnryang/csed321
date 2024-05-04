@@ -149,8 +149,10 @@ let typeOf p =
     | Cast (new_t, casted_expr) ->
         let casted_t = resolve_type type_ctx casted_expr in
         let () =
-          if is_subtype new_t casted_t = false && is_subtype casted_t new_t then
-            print_endline "Stupid Warning"
+          if
+            is_subtype new_t casted_t = false
+            && is_subtype casted_t new_t = false
+          then print_endline "Stupid Warning"
           else ()
         in
         new_t
