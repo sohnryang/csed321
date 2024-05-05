@@ -44,15 +44,6 @@ module Class = struct
   }
 end
 
-module ReducedExpr = struct
-  type t = { casted_t : typ; new_t : typ; new_args : t list }
-
-  let rec to_exp rexp =
-    let new_expr = New (rexp.new_t, List.map to_exp rexp.new_args) in
-    if rexp.casted_t = rexp.new_t then new_expr
-    else Cast (rexp.casted_t, new_expr)
-end
-
 module ClassTable = struct
   type t = Class.t NameMap.t
 
@@ -81,7 +72,6 @@ module ClassTable = struct
 end
 
 type typing_context = typ NameMap.t
-type eval_context = ReducedExpr.t NameMap.t
 
 let convert_classes class_decls =
   let convert_params params =
