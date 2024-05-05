@@ -259,13 +259,13 @@ let typeOf p =
     then false
     else if
       NameMap.exists
-        (fun method_name super_method_decl ->
-          let method_decl =
-            NameMap.find_with_type_error method_name decl.methods
+        (fun method_name method_decl ->
+          let super_method_decl =
+            NameMap.find_with_type_error method_name super_decl.methods
           in
-          List.map (fun p -> p.Param.t) super_method_decl.Method.params
-          <> List.map (fun p -> p.Param.t) method_decl.params
-          || super_method_decl.return_type <> method_decl.return_type)
+          List.map (fun p -> p.Param.t) method_decl.Method.params
+          <> List.map (fun p -> p.Param.t) super_method_decl.params
+          || method_decl.return_type <> super_method_decl.return_type)
         (NameMap.filter
            (fun method_name _ ->
              NameMap.find_opt method_name super_decl.methods <> None)
