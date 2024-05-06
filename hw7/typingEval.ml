@@ -202,7 +202,11 @@ let typeOf p =
     else if
       List.exists
         (fun (f, p) -> f.Param.name <> p.Param.name)
-        (List.combine decl.fields constructor.params)
+        (try
+           List.combine
+             (super_decl.constructor.Constructor.params @ decl.fields)
+             constructor.params
+         with Invalid_argument _ -> raise TypeError)
     then false
     else if
       NameSet.cardinal
