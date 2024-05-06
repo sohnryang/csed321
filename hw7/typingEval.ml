@@ -9,11 +9,8 @@ module NameMap' = Map.Make (String)
 module NameMap = struct
   include NameMap'
 
-  let find_with_type_error name m =
-    try NameMap'.find name m with Not_found -> raise TypeError
-
-  let find_with_stuck name m =
-    try NameMap'.find name m with Not_found -> raise Stuck
+  let find_or name m exn =
+    try NameMap'.find name m with Not_found -> raise exn
 end
 
 module Param = struct
@@ -55,13 +52,13 @@ module ClassTable = struct
     if lhs = rhs then true
     else if lhs = "Object" then false
     else
-      let lhs_decl = NameMap.find_with_type_error lhs table in
+      let lhs_decl = NameMap.find_or lhs table TypeError in
       is_subtype table lhs_decl.Class.super_name rhs
 
   let rec field_owner table t field =
     if t = "Object" then raise TypeError
     else
-      let decl = NameMap.find_with_type_error t table in
+      let decl = NameMap.find_or t table TypeError in
       match NameMap.find_opt field decl.Class.fields with
       | Some _ -> decl
       | None -> field_owner table decl.super_name field
@@ -69,7 +66,7 @@ module ClassTable = struct
   let rec method_owner table t method_name =
     if t = "Object" then raise TypeError
     else
-      let decl = NameMap.find_with_type_error t table in
+      let decl = NameMap.find_or t table TypeError in
       match NameMap.find_opt method_name decl.Class.methods with
       | Some _ -> decl
       | None -> method_owner table decl.super_name method_name
@@ -77,7 +74,7 @@ module ClassTable = struct
   let mapped_constructor_arg table t field =
     let owner = field_owner table t field in
     let rec collect_chain acc current_t =
-      let current_decl = NameMap.find_with_type_error t table in
+      let current_decl = NameMap.find_or t table TypeError in
       if current_t = owner.name then acc
       else collect_chain (current_decl :: acc) current_decl.super_name
     in
@@ -91,7 +88,7 @@ module ClassTable = struct
       List.fold_left
         (fun acc decl ->
           let super_decl =
-            NameMap.find_with_type_error decl.Class.super_name table
+            NameMap.find_or decl.Class.super_name table TypeError
           in
           let super_mapping =
             List.fold_left
@@ -103,12 +100,12 @@ module ClassTable = struct
           NameMap.fold
             (fun field super_p acc ->
               NameMap.add field
-                (NameMap.find_with_type_error super_p super_mapping)
+                (NameMap.find_or super_p super_mapping TypeError)
                 acc)
             acc NameMap.empty)
         owner_mapping chain
     in
-    NameMap.find_with_type_error field mapping
+    NameMap.find_or field mapping TypeError
 end
 
 type typing_context = typ NameMap.t
@@ -171,16 +168,16 @@ let typeOf p =
   let table = convert_classes class_decls in
   let rec resolve_type type_ctx expr =
     match expr with
-    | Var v -> NameMap.find_with_type_error v type_ctx
+    | Var v -> NameMap.find_or v type_ctx TypeError
     | Field (expr, field_name) ->
         let expr_t = resolve_type type_ctx expr in
         let field_owner = ClassTable.field_owner table expr_t field_name in
-        NameMap.find_with_type_error field_name field_owner.fields
+        NameMap.find_or field_name field_owner.fields TypeError
     | Method (expr, method_name, args) ->
         let expr_t = resolve_type type_ctx expr in
         let method_owner = ClassTable.method_owner table expr_t method_name in
         let method_decl =
-          NameMap.find_with_type_error method_name method_owner.methods
+          NameMap.find_or method_name method_owner.methods TypeError
         in
         if List.length method_decl.params <> List.length args then
           raise TypeError
@@ -193,7 +190,7 @@ let typeOf p =
         then method_decl.return_type
         else raise TypeError
     | New (new_t, args) ->
-        let new_t_decl = NameMap.find_with_type_error new_t table in
+        let new_t_decl = NameMap.find_or new_t table TypeError in
         let params = new_t_decl.constructor.params in
         if List.length params <> List.length args then raise TypeError
         else if
@@ -226,9 +223,9 @@ let typeOf p =
       method_decl.return_type
   in
   let check_class name =
-    let decl = NameMap.find_with_type_error name table in
+    let decl = NameMap.find_or name table TypeError in
     let constructor = decl.Class.constructor in
-    let super_decl = NameMap.find_with_type_error decl.super_name table in
+    let super_decl = NameMap.find_or decl.super_name table TypeError in
     if decl.name <> constructor.name then false
     else if
       List.length super_decl.constructor.params
@@ -248,7 +245,7 @@ let typeOf p =
     else if
       List.exists
         (fun (lhs, rhs) ->
-          let lhs_t = NameMap.find_with_type_error lhs decl.fields in
+          let lhs_t = NameMap.find_or lhs decl.fields TypeError in
           let rhs_t =
             (try List.find (fun p -> rhs = p.Param.name) constructor.params
              with Not_found -> raise TypeError)
@@ -261,7 +258,7 @@ let typeOf p =
       NameMap.exists
         (fun method_name method_decl ->
           let super_method_decl =
-            NameMap.find_with_type_error method_name super_decl.methods
+            NameMap.find_or method_name super_decl.methods TypeError
           in
           List.map (fun p -> p.Param.t) method_decl.Method.params
           <> List.map (fun p -> p.Param.t) super_method_decl.params
@@ -296,7 +293,7 @@ let step p =
               let mapped_arg =
                 ClassTable.mapped_constructor_arg table new_t field_name
               in
-              let new_t_decl = NameMap.find_with_stuck new_t table in
+              let new_t_decl = NameMap.find_or new_t table TypeError in
               snd
                 (List.find
                    (fun (p, _) -> p.Param.name = mapped_arg)
@@ -311,14 +308,14 @@ let step p =
               with Stuck ->
                 let owner = ClassTable.method_owner table new_t method_name in
                 let method_decl =
-                  NameMap.find_with_stuck method_name owner.methods
+                  NameMap.find_or method_name owner.methods TypeError
                 in
                 let return_expr = method_decl.return_exp in
                 let rec substitute this_expr args expr =
                   match expr with
                   | Var v ->
                       if v = "this" then this_expr
-                      else NameMap.find_with_stuck v args
+                      else NameMap.find_or v args TypeError
                   | Field (base_expr, field_name) ->
                       Field (substitute this_expr args base_expr, field_name)
                   | Method (base_expr, method_name, call_args) ->
