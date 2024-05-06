@@ -17,10 +17,20 @@ module Param = struct
   type t = { name : string; t : typ }
 end
 
+module ParamList = struct
+  type t = Param.t list
+
+  let find_param name l = List.find (fun p -> p.Param.name = name) l
+  let find_param_opt name l = List.find_opt (fun p -> p.Param.name = name) l
+
+  let find_param_or name l exn =
+    try find_param name l with Not_found -> raise exn
+end
+
 module Constructor = struct
   type t = {
     name : typ;
-    params : Param.t list;
+    params : ParamList.t;
     super_args : string list;
     assignments : (string * string) list;
   }
@@ -30,7 +40,7 @@ module Method = struct
   type t = {
     name : string;
     return_type : typ;
-    params : Param.t list;
+    params : ParamList.t;
     return_exp : exp;
   }
 end
@@ -39,7 +49,7 @@ module Class = struct
   type t = {
     name : typ;
     super_name : typ;
-    fields : typ NameMap.t;
+    fields : ParamList.t;
     constructor : Constructor.t;
     methods : Method.t NameMap.t;
   }
@@ -59,7 +69,7 @@ module ClassTable = struct
     if t = "Object" then raise TypeError
     else
       let decl = NameMap.find_or t table TypeError in
-      match NameMap.find_opt field decl.Class.fields with
+      match ParamList.find_param_opt field decl.Class.fields with
       | Some _ -> decl
       | None -> field_owner table decl.super_name field
 
@@ -139,10 +149,7 @@ let convert_classes class_decls =
     {
       Class.name;
       super_name;
-      fields =
-        List.fold_left
-          (fun acc (t, n) -> NameMap.add n t acc)
-          NameMap.empty fields;
+      fields = List.map (fun (t, name) -> { Param.name; t }) fields;
       constructor = convert_constructor constructor;
       methods = convert_methods methods;
     }
@@ -155,7 +162,7 @@ let convert_classes class_decls =
        {
          Class.name = "Object";
          super_name = "Object";
-         fields = NameMap.empty;
+         fields = [];
          constructor =
            { name = "Object"; params = []; super_args = []; assignments = [] };
          methods = NameMap.empty;
@@ -172,7 +179,7 @@ let typeOf p =
     | Field (expr, field_name) ->
         let expr_t = resolve_type type_ctx expr in
         let field_owner = ClassTable.field_owner table expr_t field_name in
-        NameMap.find_or field_name field_owner.fields TypeError
+        (ParamList.find_param_or field_name field_owner.fields TypeError).t
     | Method (expr, method_name, args) ->
         let expr_t = resolve_type type_ctx expr in
         let method_owner = ClassTable.method_owner table expr_t method_name in
@@ -245,7 +252,7 @@ let typeOf p =
     else if
       List.exists
         (fun (lhs, rhs) ->
-          let lhs_t = NameMap.find_or lhs decl.fields TypeError in
+          let lhs_t = (ParamList.find_param_or lhs decl.fields TypeError).t in
           let rhs_t =
             (try List.find (fun p -> rhs = p.Param.name) constructor.params
              with Not_found -> raise TypeError)
