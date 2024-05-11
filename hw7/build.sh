@@ -4,4 +4,4 @@ rm typing.ml
 git restore "typing.*"
 make clean
 make
-git stash apply
+cp typing_stub.ml typing.ml
