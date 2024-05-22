@@ -3,85 +3,392 @@ open Mono
 
 exception NotImplemented
 
-(* location *)
-type loc =
-  | L_INT of int (* integer constant *)
-  | L_BOOL of bool (* boolean constant *)
-  | L_UNIT (* unit constant *)
-  | L_STR of string (* string constant *)
-  | L_ADDR of Mach.addr (* at the specified address *)
-  | L_REG of Mach.reg (* at the specified register *)
-  | L_DREF of
-      loc * int (* at the specified location with the specified offset *)
+module IR_value = struct
+  type t = Resolved of rvalue | Placeholder of int
 
-type venv = (Mono.avid, loc) Dict.dict (* variable environment *)
+  let to_rvalue value =
+    match value with Resolved r -> r | Placeholder i -> REFREG (bp, i)
 
-let venv0 : venv = Dict.empty (* empty variable environment *)
+  exception IR_lvalue_invalid
 
-type env = venv * int
+  let to_lvalue value =
+    match value with
+    | Resolved rval -> (
+        match rval with
+        | REG r -> LREG r
+        | REFADDR (a, o) -> LREFADDR (a, o)
+        | REFREG (r, o) -> LREFREG (r, o)
+        | _ -> raise IR_lvalue_invalid)
+    | Placeholder i -> LREFREG (bp, i)
+end
 
-let env0 : env = (venv0, 0)
+module IR_inst = struct
+  open Mach
+  open IR_value
 
-(* val loc2rvalue : loc -> Mach.code * rvalue *)
-let rec loc2rvalue l =
-  match l with
-  | L_INT i -> (Mach.code0, Mach.INT i)
-  | L_BOOL b -> (Mach.code0, Mach.BOOL b)
-  | L_UNIT -> (Mach.code0, Mach.UNIT)
-  | L_STR s -> (Mach.code0, Mach.STR s)
-  | L_ADDR a -> (Mach.code0, Mach.ADDR a)
-  | L_REG r -> (Mach.code0, Mach.REG r)
-  | L_DREF (L_ADDR a, i) -> (Mach.code0, Mach.REFADDR (a, i))
-  | L_DREF (L_REG r, i) -> (Mach.code0, Mach.REFREG (r, i))
-  | L_DREF (l, i) ->
-      let code, rvalue = loc2rvalue l in
-      ( Mach.cpost code [ Mach.MOVE (Mach.LREG Mach.tr, rvalue) ],
-        Mach.REFREG (Mach.tr, i) )
+  type t =
+    | MOVE of IR_value.t * IR_value.t
+    | ADD of IR_value.t * IR_value.t * IR_value.t
+    | SUB of IR_value.t * IR_value.t * IR_value.t
+    | MUL of IR_value.t * IR_value.t * IR_value.t
+    | XOR of IR_value.t * IR_value.t * IR_value.t
+    | NOT of IR_value.t * IR_value.t
+    | PUSH of IR_value.t
+    | POP of IR_value.t
+    | MALLOC of IR_value.t * IR_value.t
+    | FREE of IR_value.t
+    | LABEL of string
+    | JUMP of IR_value.t
+    | JMPNEQ of IR_value.t * IR_value.t * IR_value.t
+    | JMPNEQSTR of IR_value.t * IR_value.t * IR_value.t
+    | JMPTRUE of IR_value.t * IR_value.t
+    | CALL of IR_value.t
+    | RETURN
+    | HALT of IR_value.t
+    | EXCEPTION
 
-(*
- * helper functions for debugging
- *)
-(* val loc2str : loc -> string *)
-let rec loc2str l =
-  match l with
-  | L_INT i -> "INT " ^ string_of_int i
-  | L_BOOL b -> "BOOL " ^ string_of_bool b
-  | L_UNIT -> "UNIT"
-  | L_STR s -> "STR " ^ s
-  | L_ADDR (Mach.CADDR a) -> "ADDR " ^ "&" ^ a
-  | L_ADDR (Mach.HADDR a) -> "ADDR " ^ "&Heap_" ^ string_of_int a
-  | L_ADDR (Mach.SADDR a) -> "ADDR " ^ "&Stack_" ^ string_of_int a
-  | L_REG r ->
-      if r = Mach.sp then "REG SP"
-      else if r = Mach.bp then "REG BP"
-      else if r = Mach.cp then "REG CP"
-      else if r = Mach.ax then "REG AX"
-      else if r = Mach.bx then "REG BX"
-      else if r = Mach.tr then "REG TR"
-      else if r = Mach.zr then "REG ZR"
-      else "R[" ^ string_of_int r ^ "]"
-  | L_DREF (l, i) -> "DREF(" ^ loc2str l ^ ", " ^ string_of_int i ^ ")"
+  let to_code inst =
+    match inst with
+    | MOVE (lval, rval) ->
+        Mach.MOVE (IR_value.to_lvalue lval, IR_value.to_rvalue rval)
+    | ADD (lval, rval1, rval2) ->
+        ADD
+          ( IR_value.to_lvalue lval,
+            IR_value.to_rvalue rval1,
+            IR_value.to_rvalue rval2 )
+    | SUB (lval, rval1, rval2) ->
+        SUB
+          ( IR_value.to_lvalue lval,
+            IR_value.to_rvalue rval1,
+            IR_value.to_rvalue rval2 )
+    | MUL (lval, rval1, rval2) ->
+        MUL
+          ( IR_value.to_lvalue lval,
+            IR_value.to_rvalue rval1,
+            IR_value.to_rvalue rval2 )
+    | XOR (lval, rval1, rval2) ->
+        XOR
+          ( IR_value.to_lvalue lval,
+            IR_value.to_rvalue rval1,
+            IR_value.to_rvalue rval2 )
+    | NOT (lval, rval) -> NOT (IR_value.to_lvalue lval, IR_value.to_rvalue rval)
+    | PUSH rval -> PUSH (IR_value.to_rvalue rval)
+    | POP lval -> POP (IR_value.to_lvalue lval)
+    | MALLOC (lval, rval) ->
+        MALLOC (IR_value.to_lvalue lval, IR_value.to_rvalue rval)
+    | FREE rval -> FREE (IR_value.to_rvalue rval)
+    | LABEL l -> LABEL l
+    | JUMP rval -> JUMP (IR_value.to_rvalue rval)
+    | JMPNEQ (rval1, rval2, rval3) ->
+        JMPNEQ
+          ( IR_value.to_rvalue rval1,
+            IR_value.to_rvalue rval2,
+            IR_value.to_rvalue rval3 )
+    | JMPNEQSTR (rval1, rval2, rval3) ->
+        JMPNEQSTR
+          ( IR_value.to_rvalue rval1,
+            IR_value.to_rvalue rval2,
+            IR_value.to_rvalue rval3 )
+    | JMPTRUE (rval1, rval2) ->
+        JMPTRUE (IR_value.to_rvalue rval1, IR_value.to_rvalue rval2)
+    | CALL rval -> CALL (IR_value.to_rvalue rval)
+    | RETURN -> RETURN
+    | HALT rval -> HALT (IR_value.to_rvalue rval)
+    | EXCEPTION -> EXCEPTION
+end
 
-(*
- * Generate code for Abstract Machine MACH 
- *)
-(* pat2code : Mach.label -> Mach.label - > loc -> Mono.pat -> Mach.code * venv *)
-let pat2code _ _ _ _ = raise NotImplemented
+module NameMap = Map.Make (String)
+module NameSet = Set.Make (String)
 
-(* patty2code : Mach.label -> Mach.label -> loc -> Mono.patty -> Mach.code * venv *)
-let patty2code _ _ _ _ = raise NotImplemented
+module IR_trans_env = struct
+  type loc = Arg | Context of int
 
-(* exp2code : env -> Mach.label -> Mono.exp -> Mach.code * Mach.rvalue *)
-let exp2code _ _ _ = raise NotImplemented
+  type t = {
+    next_var_id : int;
+    next_label_id : int;
+    ctx_mapping : loc NameMap.t;
+  }
 
-(* expty2code : env -> Mach.label -> Mono.expty -> Mach.code * Mach.rvalue *)
-let expty2code _ _ _ = raise NotImplemented
+  let empty =
+    { next_var_id = 0; next_label_id = 0; ctx_mapping = NameMap.empty }
 
-(* dec2code : env -> Mach.label -> Mono.dec -> Mach.code * env *)
-let dec2code _ _ _ = raise NotImplemented
+  let create_fresh_var trans_env =
+    ( { trans_env with next_var_id = trans_env.next_var_id + 1 },
+      trans_env.next_var_id )
 
-(* mrule2code : env -> Mach.label -> Mono.mrule -> Mach.code *)
-let mrule2code _ _ _ = raise NotImplemented
+  let create_fresh_label trans_env =
+    ( { trans_env with next_label_id = trans_env.next_label_id + 1 },
+      "label_" ^ string_of_int trans_env.next_label_id )
+end
+
+module IR_func = struct
+  open IR_inst
+  open IR_value
+
+  type t = {
+    name : label;
+    body_insts : IR_inst.t list;
+    return_value : IR_value.t;
+    local_var_count : int;
+  }
+
+  let to_code func =
+    let rec repeat l n v = if n = 0 then l else repeat (v :: l) (n - 1) v in
+    [ Mach.LABEL func.name ]
+    @ repeat [] func.local_var_count (Mach.PUSH (REG zr))
+    @ List.map IR_inst.to_code func.body_insts
+    @ [ IR_inst.to_code (MOVE (Resolved (REG ax), func.return_value)) ]
+    @ repeat [] func.local_var_count (Mach.POP (LREG zr))
+    @ [ RETURN ]
+end
+
+module IR_block = struct
+  exception IR_translation_error
+
+  open IR_value
+  open IR_inst
+  open IR_trans_env
+  open IR_func
+
+  type t = {
+    next_env : IR_trans_env.t;
+    insts : IR_inst.t list;
+    value : IR_value.t;
+    dependencies : IR_func.t NameMap.t;
+  }
+
+  let rec of_expr trans_env expr =
+    match expr with
+    | E_INT v ->
+        {
+          next_env = trans_env;
+          insts = [];
+          value = IR_value.Resolved (INT v);
+          dependencies = NameMap.empty;
+        }
+    | E_BOOL v ->
+        {
+          next_env = trans_env;
+          insts = [];
+          value = IR_value.Resolved (BOOL v);
+          dependencies = NameMap.empty;
+        }
+    | E_UNIT ->
+        {
+          next_env = trans_env;
+          insts = [];
+          value = IR_value.Resolved UNIT;
+          dependencies = NameMap.empty;
+        }
+    | E_PLUS | E_MINUS | E_MULT | E_EQ | E_NEQ -> raise IR_translation_error
+    | E_VID v -> (
+        let name, kind = v in
+        match kind with
+        | VAR -> (
+            let variable_mapping = NameMap.find name trans_env.ctx_mapping in
+            match variable_mapping with
+            | Arg ->
+                {
+                  next_env = trans_env;
+                  insts = [];
+                  value = IR_value.Resolved (REFREG (bp, -3));
+                  dependencies = NameMap.empty;
+                }
+            | Context ctx_index ->
+                {
+                  next_env = trans_env;
+                  insts = [];
+                  value = IR_value.Resolved (REFREG (cp, ctx_index));
+                  dependencies = NameMap.empty;
+                })
+        | CON -> raise NotImplemented
+        | CONF -> raise NotImplemented)
+    | E_FUN rules -> (
+        match rules with
+        | [ M_RULE (PATTY (P_VID (arg_name, VAR), _), EXPTY (body_expr, _)) ] ->
+            let rec collect_captures ctx_mapping shadowed expr =
+              match expr with
+              | E_VID (v, VAR) -> (
+                  match NameMap.find_opt v ctx_mapping with
+                  | Some (IR_trans_env.Context _)
+                    when NameSet.exists (fun v' -> v' = v) shadowed = false ->
+                      NameSet.singleton v
+                  | _ -> NameSet.empty)
+              | E_FUN _ -> raise NotImplemented
+              | E_APP (EXPTY (abs_expr, _), EXPTY (arg_expr, _)) ->
+                  NameSet.union
+                    (collect_captures ctx_mapping shadowed abs_expr)
+                    (collect_captures ctx_mapping shadowed arg_expr)
+              | E_PAIR (EXPTY (fst_expr, _), EXPTY (snd_expr, _)) ->
+                  NameSet.union
+                    (collect_captures ctx_mapping shadowed fst_expr)
+                    (collect_captures ctx_mapping shadowed snd_expr)
+              | E_LET _ -> raise NotImplemented
+              | _ -> NameSet.empty
+            in
+            let captured =
+              collect_captures trans_env.ctx_mapping
+                (NameSet.singleton arg_name)
+                body_expr
+            in
+            let body_ctx_mapping =
+              NameMap.add arg_name IR_trans_env.Arg
+                (NameSet.fold
+                   (fun name mapping ->
+                     NameMap.add name
+                       (IR_trans_env.Context (NameMap.cardinal mapping))
+                       mapping)
+                   captured NameMap.empty)
+            in
+            let body_trans_env =
+              {
+                IR_trans_env.empty with
+                ctx_mapping = body_ctx_mapping;
+                next_label_id = trans_env.next_label_id;
+              }
+            in
+            let body_translated = of_expr body_trans_env body_expr in
+            let next_env, fresh_label =
+              IR_trans_env.create_fresh_label
+                {
+                  trans_env with
+                  next_label_id = body_translated.next_env.next_label_id;
+                }
+            in
+            let capturing_copy_insts =
+              NameMap.fold
+                (fun n l acc ->
+                  match (l, NameMap.find_opt n trans_env.ctx_mapping) with
+                  | IR_trans_env.Context inner_id, Some (Context outer_id) ->
+                      acc
+                      @ [
+                          IR_inst.MOVE
+                            ( Resolved (REFREG (tr, inner_id)),
+                              Resolved (REFREG (cp, outer_id)) );
+                        ]
+                  | _ -> acc)
+                body_ctx_mapping []
+            in
+            {
+              next_env;
+              insts =
+                [
+                  IR_inst.MALLOC (Resolved (REG tr), Resolved (INT 2));
+                  MOVE
+                    ( Resolved (REFREG (tr, 0)),
+                      Resolved (ADDR (CADDR fresh_label)) );
+                  MALLOC
+                    ( Resolved (REFREG (tr, 1)),
+                      Resolved (INT (List.length capturing_copy_insts)) );
+                  PUSH (Resolved (REG tr));
+                  MOVE (Resolved (REG tr), Resolved (REFREG (tr, 1)));
+                ]
+                @ capturing_copy_insts
+                @ [ IR_inst.POP (Resolved (REG tr)) ];
+              value = IR_value.Resolved (REG tr);
+              dependencies =
+                NameMap.add fresh_label
+                  {
+                    IR_func.name = fresh_label;
+                    body_insts = body_translated.insts;
+                    return_value = body_translated.value;
+                    local_var_count = body_translated.next_env.next_var_id;
+                  }
+                  body_translated.dependencies;
+            }
+        | _ -> raise NotImplemented)
+    | E_APP (EXPTY (abs_expr, _), EXPTY (arg_expr, _)) ->
+        let arg_block = of_expr trans_env arg_expr in
+        let abs_block = of_expr arg_block.next_env abs_expr in
+        {
+          next_env = abs_block.next_env;
+          insts =
+            abs_block.insts @ arg_block.insts
+            @ [
+                PUSH (IR_value.Resolved (REG cp));
+                PUSH arg_block.value;
+                MOVE (IR_value.Resolved (REG tr), abs_block.value);
+                MOVE
+                  ( IR_value.Resolved (REG cp),
+                    IR_value.Resolved (REFREG (tr, 1)) );
+                CALL (IR_value.Resolved (REFREG (tr, 0)));
+                POP (IR_value.Resolved (REG zr));
+                POP (IR_value.Resolved (REG cp));
+              ];
+          value = IR_value.Resolved (REG ax);
+          dependencies =
+            NameMap.union
+              (fun _ f1 f2 ->
+                let () = assert (f1 = f2) in
+                Some f1)
+              abs_block.dependencies arg_block.dependencies;
+        }
+    | E_PAIR _ -> raise NotImplemented
+    | E_LET _ -> raise NotImplemented
+end
 
 (* program2code : Mono.program -> Mach.code *)
-let program2code (dlist, et) = raise NotImplemented
+let program2code (dlist, et) =
+  let non_dtype_defs = List.filter (fun d -> d <> D_DTYPE) dlist in
+  let ctx_mapping, _ =
+    List.fold_left
+      (fun (acc, i) d ->
+        match d with
+        | D_VAL (PATTY (P_VID (val_name, VAR), _), _) ->
+            (NameMap.add val_name (IR_trans_env.Context i) acc, i + 1)
+        | _ -> (acc, i))
+      (NameMap.empty, 0) non_dtype_defs
+  in
+  let def_blocks, next_label_id =
+    List.fold_left
+      (fun (acc, next_label_id) d ->
+        let block =
+          match d with
+          | D_VAL (PATTY (P_VID (val_name, VAR), _), EXPTY (def_expr, _)) ->
+              IR_block.of_expr
+                { IR_trans_env.ctx_mapping; next_label_id; next_var_id = 0 }
+                def_expr
+          | _ -> raise NotImplemented
+        in
+        (acc @ [ block ], block.next_env.next_label_id))
+      ([], 0) non_dtype_defs
+  in
+  let (EXPTY (expr, _)) = et in
+  let expr_block =
+    IR_block.of_expr
+      { IR_trans_env.ctx_mapping; next_label_id; next_var_id = 0 }
+      expr
+  in
+  let unioned_deps =
+    List.fold_left
+      (fun acc block ->
+        NameMap.union
+          (fun _ f1 f2 ->
+            let () = assert (f1 = f2) in
+            Some f1)
+          acc block.IR_block.dependencies)
+      NameMap.empty (expr_block :: def_blocks)
+  in
+  let rec repeat l n v = if n = 0 then l else repeat (v :: l) (n - 1) v in
+  [ LABEL Mach.start_label; MALLOC (LREG cp, INT (List.length non_dtype_defs)) ]
+  @ NameMap.fold
+      (fun name l acc ->
+        match l with
+        | IR_trans_env.Context i ->
+            let block = List.nth def_blocks i in
+            let locals_count = block.next_env.next_var_id in
+            acc
+            @ repeat [] locals_count (PUSH (REG zr))
+            @ List.map IR_inst.to_code block.insts
+            @ [
+                IR_inst.to_code
+                  (IR_inst.MOVE (IR_value.Resolved (REFREG (cp, i)), block.value));
+              ]
+            @ repeat [] locals_count (POP (LREG zr))
+        | _ -> raise NotImplemented)
+      ctx_mapping []
+  @ repeat [] expr_block.next_env.next_var_id (PUSH (REG zr))
+  @ List.map IR_inst.to_code expr_block.insts
+  @ repeat [] expr_block.next_env.next_var_id (POP (LREG zr))
+  @ [ IR_inst.to_code (IR_inst.HALT expr_block.value) ]
+  @ NameMap.fold (fun _ func acc -> acc @ IR_func.to_code func) unioned_deps []
