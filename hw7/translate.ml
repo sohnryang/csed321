@@ -112,9 +112,11 @@ module IR_trans_env = struct
   let empty =
     { next_var_id = 0; next_label_id = 0; ctx_mapping = NameMap.empty }
 
+  open IR_value
+
   let create_fresh_var trans_env =
     ( { trans_env with next_var_id = trans_env.next_var_id + 1 },
-      trans_env.next_var_id )
+      Placeholder trans_env.next_var_id )
 
   let create_fresh_label trans_env =
     ( { trans_env with next_label_id = trans_env.next_label_id + 1 },
