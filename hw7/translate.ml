@@ -216,7 +216,14 @@ module IR_block = struct
                     when NameSet.exists (fun v' -> v' = v) shadowed = false ->
                       NameSet.singleton v
                   | _ -> NameSet.empty)
-              | E_FUN _ -> raise NotImplemented
+              | E_FUN rules -> (
+                  match rules with
+                  | [
+                   M_RULE
+                     (PATTY (P_VID (arg_name', VAR), _), EXPTY (body_expr', _));
+                  ] ->
+                      raise NotImplemented
+                  | _ -> raise NotImplemented)
               | E_APP (EXPTY (abs_expr, _), EXPTY (arg_expr, _)) ->
                   NameSet.union
                     (collect_captures ctx_mapping shadowed abs_expr)
@@ -299,33 +306,85 @@ module IR_block = struct
                   body_translated.dependencies;
             }
         | _ -> raise NotImplemented)
-    | E_APP (EXPTY (abs_expr, _), EXPTY (arg_expr, _)) ->
+    | E_APP (EXPTY (abs_expr, _), EXPTY (arg_expr, _)) -> (
         let arg_block = of_expr trans_env arg_expr in
-        let abs_block = of_expr arg_block.next_env abs_expr in
+        match abs_expr with
+        | E_PLUS | E_MINUS | E_MULT ->
+            let next_env, fresh_var =
+              IR_trans_env.create_fresh_var arg_block.next_env
+            in
+            {
+              next_env;
+              insts =
+                arg_block.insts
+                @ [
+                    MOVE (Resolved (REG tr), arg_block.value);
+                    (match abs_expr with
+                    | E_PLUS ->
+                        ADD
+                          ( fresh_var,
+                            Resolved (REFREG (tr, 0)),
+                            Resolved (REFREG (tr, 1)) )
+                    | E_MINUS ->
+                        SUB
+                          ( fresh_var,
+                            Resolved (REFREG (tr, 0)),
+                            Resolved (REFREG (tr, 1)) )
+                    | E_MULT ->
+                        MUL
+                          ( fresh_var,
+                            Resolved (REFREG (tr, 0)),
+                            Resolved (REFREG (tr, 1)) )
+                    | _ -> raise IR_translation_error);
+                  ];
+              value = fresh_var;
+              dependencies = arg_block.dependencies;
+            }
+        | E_EQ | E_NEQ -> raise NotImplemented
+        | _ ->
+            let abs_block = of_expr arg_block.next_env abs_expr in
+            {
+              next_env = abs_block.next_env;
+              insts =
+                abs_block.insts @ arg_block.insts
+                @ [
+                    PUSH (IR_value.Resolved (REG cp));
+                    PUSH arg_block.value;
+                    MOVE (IR_value.Resolved (REG tr), abs_block.value);
+                    MOVE
+                      ( IR_value.Resolved (REG cp),
+                        IR_value.Resolved (REFREG (tr, 1)) );
+                    CALL (IR_value.Resolved (REFREG (tr, 0)));
+                    POP (IR_value.Resolved (REG zr));
+                    POP (IR_value.Resolved (REG cp));
+                  ];
+              value = IR_value.Resolved (REG ax);
+              dependencies =
+                NameMap.union
+                  (fun _ f1 f2 ->
+                    let () = assert (f1 = f2) in
+                    Some f1)
+                  abs_block.dependencies arg_block.dependencies;
+            })
+    | E_PAIR (EXPTY (fst_expr, _), EXPTY (snd_expr, _)) ->
+        let fst_block = of_expr trans_env fst_expr in
+        let snd_block = of_expr fst_block.next_env snd_expr in
         {
-          next_env = abs_block.next_env;
+          next_env = snd_block.next_env;
           insts =
-            abs_block.insts @ arg_block.insts
-            @ [
-                PUSH (IR_value.Resolved (REG cp));
-                PUSH arg_block.value;
-                MOVE (IR_value.Resolved (REG tr), abs_block.value);
-                MOVE
-                  ( IR_value.Resolved (REG cp),
-                    IR_value.Resolved (REFREG (tr, 1)) );
-                CALL (IR_value.Resolved (REFREG (tr, 0)));
-                POP (IR_value.Resolved (REG zr));
-                POP (IR_value.Resolved (REG cp));
-              ];
-          value = IR_value.Resolved (REG ax);
+            [
+              MALLOC (Resolved (REG tr), Resolved (INT 2));
+              MOVE (Resolved (REFREG (tr, 0)), fst_block.value);
+              MOVE (Resolved (REFREG (tr, 1)), snd_block.value);
+            ];
+          value = Resolved (REG tr);
           dependencies =
             NameMap.union
               (fun _ f1 f2 ->
                 let () = assert (f1 = f2) in
                 Some f1)
-              abs_block.dependencies arg_block.dependencies;
+              fst_block.dependencies snd_block.dependencies;
         }
-    | E_PAIR _ -> raise NotImplemented
     | E_LET _ -> raise NotImplemented
 end
 
