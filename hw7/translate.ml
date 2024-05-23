@@ -340,7 +340,29 @@ module IR_block = struct
               value = fresh_var;
               dependencies = arg_block.dependencies;
             }
-        | E_EQ | E_NEQ -> raise NotImplemented
+        | E_EQ | E_NEQ ->
+            let next_env, fresh_label =
+              IR_trans_env.create_fresh_label arg_block.next_env
+            in
+            let next_env, fresh_var = IR_trans_env.create_fresh_var next_env in
+            let default_value = abs_expr = E_NEQ in
+            {
+              next_env;
+              insts =
+                arg_block.insts
+                @ [
+                    MOVE (Resolved (REG tr), arg_block.value);
+                    MOVE (fresh_var, Resolved (BOOL default_value));
+                    JMPNEQ
+                      ( Resolved (ADDR (CADDR fresh_label)),
+                        Resolved (REFREG (tr, 0)),
+                        Resolved (REFREG (tr, 1)) );
+                    MOVE (fresh_var, Resolved (BOOL (default_value = false)));
+                    LABEL fresh_label;
+                  ];
+              value = fresh_var;
+              dependencies = arg_block.dependencies;
+            }
         | _ ->
             let abs_block = of_expr arg_block.next_env abs_expr in
             {
