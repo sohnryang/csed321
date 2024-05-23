@@ -369,26 +369,35 @@ let program2code (dlist, et) =
           acc block.IR_block.dependencies)
       NameMap.empty (expr_block :: def_blocks)
   in
+  let ctx_mapping_sorted =
+    List.sort
+      (fun (_, x) (_, y) -> x - y)
+      (NameMap.fold
+         (fun k v acc ->
+           match v with
+           | IR_trans_env.Context i -> (k, i) :: acc
+           | IR_trans_env.Arg -> raise NotImplemented)
+         ctx_mapping [])
+  in
   let rec repeat l n v = if n = 0 then l else repeat (v :: l) (n - 1) v in
   [ LABEL Mach.start_label; MALLOC (LREG cp, INT (List.length non_dtype_defs)) ]
-  @ NameMap.fold
-      (fun name l acc ->
-        match l with
-        | IR_trans_env.Context i ->
-            let block = List.nth def_blocks i in
-            let locals_count = block.next_env.next_var_id in
-            acc
-            @ repeat [] locals_count (PUSH (REG zr))
-            @ List.map IR_inst.to_code block.insts
-            @ [
-                IR_inst.to_code
-                  (IR_inst.MOVE (IR_value.Resolved (REFREG (cp, i)), block.value));
-              ]
-            @ repeat [] locals_count (POP (LREG zr))
-        | _ -> raise NotImplemented)
-      ctx_mapping []
-  @ repeat [] expr_block.next_env.next_var_id (PUSH (REG zr))
-  @ List.map IR_inst.to_code expr_block.insts
+  @ List.fold_left
+      (fun acc (name, i) ->
+        let block = List.nth def_blocks i in
+        let locals_count = block.IR_block.next_env.IR_trans_env.next_var_id in
+        acc
+        @ repeat [] locals_count (PUSH (REG zr))
+        @ List.map IR_inst.to_code block.IR_block.insts
+        @ [
+            IR_inst.to_code
+              (IR_inst.MOVE
+                 (IR_value.Resolved (REFREG (cp, i)), block.IR_block.value));
+          ]
+        @ repeat [] locals_count (POP (LREG zr)))
+      [] ctx_mapping_sorted
+  @ repeat [] expr_block.IR_block.next_env.IR_trans_env.next_var_id
+      (PUSH (REG zr))
+  @ List.map IR_inst.to_code expr_block.IR_block.insts
   @ repeat [] expr_block.next_env.next_var_id (POP (LREG zr))
   @ [ IR_inst.to_code (IR_inst.HALT expr_block.value) ]
   @ NameMap.fold (fun _ func acc -> acc @ IR_func.to_code func) unioned_deps []
