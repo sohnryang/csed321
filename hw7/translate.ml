@@ -372,11 +372,13 @@ module IR_block = struct
         {
           next_env = snd_block.next_env;
           insts =
-            [
-              MALLOC (Resolved (REG tr), Resolved (INT 2));
-              MOVE (Resolved (REFREG (tr, 0)), fst_block.value);
-              MOVE (Resolved (REFREG (tr, 1)), snd_block.value);
-            ];
+            fst_block.insts @ [ PUSH fst_block.value ] @ snd_block.insts
+            @ [
+                PUSH snd_block.value;
+                MALLOC (Resolved (REG tr), Resolved (INT 2));
+                POP (Resolved (REFREG (tr, 1)));
+                POP (Resolved (REFREG (tr, 0)));
+              ];
           value = Resolved (REG tr);
           dependencies =
             NameMap.union
