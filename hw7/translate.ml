@@ -350,7 +350,7 @@ let program2code (dlist, et) =
                 def_expr
           | _ -> raise NotImplemented
         in
-        (acc @ [ block ], block.next_env.next_label_id))
+        (acc @ [ block ], block.IR_block.next_env.IR_trans_env.next_label_id))
       ([], 0) non_dtype_defs
   in
   let (EXPTY (expr, _)) = et in
@@ -398,6 +398,7 @@ let program2code (dlist, et) =
   @ repeat [] expr_block.IR_block.next_env.IR_trans_env.next_var_id
       (PUSH (REG zr))
   @ List.map IR_inst.to_code expr_block.IR_block.insts
-  @ repeat [] expr_block.next_env.next_var_id (POP (LREG zr))
-  @ [ IR_inst.to_code (IR_inst.HALT expr_block.value) ]
+  @ repeat [] expr_block.IR_block.next_env.IR_trans_env.next_var_id
+      (POP (LREG zr))
+  @ [ IR_inst.to_code (IR_inst.HALT expr_block.IR_block.value) ]
   @ NameMap.fold (fun _ func acc -> acc @ IR_func.to_code func) unioned_deps []
