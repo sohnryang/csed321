@@ -101,7 +101,7 @@ module NameMap = Map.Make (String)
 module NameSet = Set.Make (String)
 
 module IR_trans_env = struct
-  type loc = Arg | Context of int
+  type loc = Arg | Context of int | Local of IR_value.t
 
   type t = {
     next_var_id : int;
@@ -201,6 +201,13 @@ module IR_block = struct
                   next_env = trans_env;
                   insts = [];
                   value = IR_value.Resolved (REFREG (cp, ctx_index));
+                  dependencies = NameMap.empty;
+                }
+            | Local local_var ->
+                {
+                  next_env = trans_env;
+                  insts = [];
+                  value = local_var;
                   dependencies = NameMap.empty;
                 })
         | CON -> raise NotImplemented
@@ -409,7 +416,35 @@ module IR_block = struct
                 Some f1)
               fst_block.dependencies snd_block.dependencies;
         }
-    | E_LET _ -> raise NotImplemented
+    | E_LET (decl, EXPTY (inner_expr, _)) -> (
+        match decl with
+        | D_VAL (PATTY (P_VID (var_name, VAR), _), EXPTY (var_expr, _)) ->
+            let var_expr_block = of_expr trans_env var_expr in
+            let next_env, fresh_var =
+              IR_trans_env.create_fresh_var var_expr_block.next_env
+            in
+            let next_env =
+              {
+                next_env with
+                ctx_mapping =
+                  NameMap.add var_name (Local fresh_var) next_env.ctx_mapping;
+              }
+            in
+            let inner_block = of_expr next_env inner_expr in
+            {
+              inner_block with
+              insts =
+                var_expr_block.insts
+                @ [ MOVE (fresh_var, var_expr_block.value) ]
+                @ inner_block.insts;
+              dependencies =
+                NameMap.union
+                  (fun _ f1 f2 ->
+                    let () = assert (f1 = f2) in
+                    Some f1)
+                  var_expr_block.dependencies inner_block.dependencies;
+            }
+        | _ -> raise NotImplemented)
 end
 
 (* program2code : Mono.program -> Mach.code *)
@@ -461,7 +496,7 @@ let program2code (dlist, et) =
          (fun k v acc ->
            match v with
            | IR_trans_env.Context i -> (k, i) :: acc
-           | IR_trans_env.Arg -> raise NotImplemented)
+           | _ -> raise NotImplemented)
          ctx_mapping [])
   in
   let rec repeat l n v = if n = 0 then l else repeat (v :: l) (n - 1) v in
