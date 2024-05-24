@@ -215,37 +215,46 @@ module IR_block = struct
     | E_FUN rules -> (
         match rules with
         | [ M_RULE (PATTY (P_VID (arg_name, VAR), _), EXPTY (body_expr, _)) ] ->
-            let rec collect_captures ctx_mapping shadowed expr =
+            let rec collect_captures current_level_names expr =
               match expr with
-              | E_VID (v, VAR) -> (
-                  match NameMap.find_opt v ctx_mapping with
-                  | Some (IR_trans_env.Context _)
-                    when NameSet.exists (fun v' -> v' = v) shadowed = false ->
-                      NameSet.singleton v
-                  | _ -> NameSet.empty)
+              | E_VID (v, VAR) ->
+                  if NameSet.find_opt v current_level_names = None then
+                    NameSet.singleton v
+                  else NameSet.empty
               | E_FUN rules -> (
                   match rules with
                   | [
                    M_RULE
                      (PATTY (P_VID (arg_name', VAR), _), EXPTY (body_expr', _));
                   ] ->
-                      raise NotImplemented
+                      NameSet.diff
+                        (collect_captures
+                           (NameSet.singleton arg_name')
+                           body_expr')
+                        current_level_names
                   | _ -> raise NotImplemented)
               | E_APP (EXPTY (abs_expr, _), EXPTY (arg_expr, _)) ->
                   NameSet.union
-                    (collect_captures ctx_mapping shadowed abs_expr)
-                    (collect_captures ctx_mapping shadowed arg_expr)
+                    (collect_captures current_level_names abs_expr)
+                    (collect_captures current_level_names arg_expr)
               | E_PAIR (EXPTY (fst_expr, _), EXPTY (snd_expr, _)) ->
                   NameSet.union
-                    (collect_captures ctx_mapping shadowed fst_expr)
-                    (collect_captures ctx_mapping shadowed snd_expr)
-              | E_LET _ -> raise NotImplemented
+                    (collect_captures current_level_names fst_expr)
+                    (collect_captures current_level_names snd_expr)
+              | E_LET (decl, EXPTY (inner_expr, _)) -> (
+                  match decl with
+                  | D_VAL (PATTY (P_VID (var_name, VAR), _), EXPTY (var_expr, _))
+                    ->
+                      NameSet.union
+                        (collect_captures current_level_names var_expr)
+                        (collect_captures
+                           (NameSet.add var_name current_level_names)
+                           inner_expr)
+                  | _ -> raise NotImplemented)
               | _ -> NameSet.empty
             in
             let captured_names =
-              collect_captures trans_env.ctx_mapping
-                (NameSet.singleton arg_name)
-                body_expr
+              collect_captures (NameSet.singleton arg_name) body_expr
             in
             let body_ctx_mapping =
               NameMap.add arg_name IR_trans_env.Arg
@@ -275,12 +284,17 @@ module IR_block = struct
               NameMap.fold
                 (fun n l acc ->
                   match (l, NameMap.find_opt n trans_env.ctx_mapping) with
-                  | IR_trans_env.Context inner_id, Some (Context outer_id) ->
+                  | IR_trans_env.Context inner_id, Some outer ->
+                      let outer_value =
+                        match outer with
+                        | Context id -> Resolved (REFREG (cp, id))
+                        | Arg -> Resolved (REFREG (bp, -3))
+                        | Local v -> v
+                      in
                       acc
                       @ [
                           IR_inst.MOVE
-                            ( Resolved (REFREG (tr, inner_id)),
-                              Resolved (REFREG (cp, outer_id)) );
+                            (Resolved (REFREG (tr, inner_id)), outer_value);
                         ]
                   | _ -> acc)
                 body_ctx_mapping []
@@ -375,10 +389,10 @@ module IR_block = struct
             {
               next_env = abs_block.next_env;
               insts =
-                abs_block.insts @ arg_block.insts
+                arg_block.insts
+                @ [ PUSH (IR_value.Resolved (REG cp)); PUSH arg_block.value ]
+                @ abs_block.insts
                 @ [
-                    PUSH (IR_value.Resolved (REG cp));
-                    PUSH arg_block.value;
                     MOVE (IR_value.Resolved (REG tr), abs_block.value);
                     MOVE
                       ( IR_value.Resolved (REG cp),
