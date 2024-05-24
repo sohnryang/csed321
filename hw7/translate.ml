@@ -242,7 +242,7 @@ module IR_block = struct
               | E_LET _ -> raise NotImplemented
               | _ -> NameSet.empty
             in
-            let captured =
+            let captured_names =
               collect_captures trans_env.ctx_mapping
                 (NameSet.singleton arg_name)
                 body_expr
@@ -254,7 +254,7 @@ module IR_block = struct
                      NameMap.add name
                        (IR_trans_env.Context (NameMap.cardinal mapping))
                        mapping)
-                   captured NameMap.empty)
+                   captured_names NameMap.empty)
             in
             let body_trans_env =
               {
