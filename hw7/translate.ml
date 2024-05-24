@@ -186,30 +186,20 @@ module IR_block = struct
     | E_VID v -> (
         let name, kind = v in
         match kind with
-        | VAR -> (
+        | VAR ->
             let variable_mapping = NameMap.find name trans_env.ctx_mapping in
-            match variable_mapping with
-            | Arg ->
-                {
-                  next_env = trans_env;
-                  insts = [];
-                  value = IR_value.Resolved (REFREG (bp, -3));
-                  dependencies = NameMap.empty;
-                }
-            | Context ctx_index ->
-                {
-                  next_env = trans_env;
-                  insts = [];
-                  value = IR_value.Resolved (REFREG (cp, ctx_index));
-                  dependencies = NameMap.empty;
-                }
-            | Local local_var ->
-                {
-                  next_env = trans_env;
-                  insts = [];
-                  value = local_var;
-                  dependencies = NameMap.empty;
-                })
+            let value =
+              match variable_mapping with
+              | Arg -> IR_value.Resolved (REFREG (bp, -3))
+              | Context ctx_index -> IR_value.Resolved (REFREG (cp, ctx_index))
+              | Local local_var -> local_var
+            in
+            {
+              next_env = trans_env;
+              insts = [];
+              value;
+              dependencies = NameMap.empty;
+            }
         | CON -> raise NotImplemented
         | CONF -> raise NotImplemented)
     | E_FUN rules -> (
