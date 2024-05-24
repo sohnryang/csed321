@@ -4,3 +4,4 @@ hw7
 lexer.ml
 parser.ml
 parser.mli
+*.exe
