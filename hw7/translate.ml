@@ -107,10 +107,16 @@ module IR_trans_env = struct
     next_var_id : int;
     next_label_id : int;
     ctx_mapping : loc NameMap.t;
+    self_name : avid option;
   }
 
   let empty =
-    { next_var_id = 0; next_label_id = 0; ctx_mapping = NameMap.empty }
+    {
+      next_var_id = 0;
+      next_label_id = 0;
+      ctx_mapping = NameMap.empty;
+      self_name = None;
+    }
 
   open IR_value
 
@@ -272,10 +278,13 @@ module IR_block = struct
                   match (l, NameMap.find_opt n trans_env.ctx_mapping) with
                   | IR_trans_env.Context inner_id, Some outer ->
                       let outer_value =
-                        match outer with
-                        | Context id -> Resolved (REFREG (cp, id))
-                        | Arg -> Resolved (REFREG (bp, -3))
-                        | Local v -> v
+                        if trans_env.self_name = Some n then
+                          Resolved (REFREG (sp, -1))
+                        else
+                          match outer with
+                          | Context id -> Resolved (REFREG (cp, id))
+                          | Arg -> Resolved (REFREG (bp, -3))
+                          | Local v -> v
                       in
                       acc
                       @ [
@@ -444,6 +453,40 @@ module IR_block = struct
                     Some f1)
                   var_expr_block.dependencies inner_block.dependencies;
             }
+        | D_REC (PATTY (P_VID (var_name, VAR), _), EXPTY (var_expr, _)) ->
+            let next_env, fresh_var = IR_trans_env.create_fresh_var trans_env in
+            let var_expr_block =
+              of_expr
+                {
+                  next_env with
+                  ctx_mapping =
+                    NameMap.add var_name (Local fresh_var) next_env.ctx_mapping;
+                  self_name = Some var_name;
+                }
+                var_expr
+            in
+            let next_env =
+              {
+                next_env with
+                ctx_mapping =
+                  NameMap.add var_name (Local fresh_var) next_env.ctx_mapping;
+                self_name = None;
+              }
+            in
+            let inner_block = of_expr next_env inner_expr in
+            {
+              inner_block with
+              insts =
+                var_expr_block.insts
+                @ [ MOVE (fresh_var, var_expr_block.value) ]
+                @ inner_block.insts;
+              dependencies =
+                NameMap.union
+                  (fun _ f1 f2 ->
+                    let () = assert (f1 = f2) in
+                    Some f1)
+                  var_expr_block.dependencies inner_block.dependencies;
+            }
         | _ -> raise NotImplemented)
 end
 
@@ -454,7 +497,8 @@ let program2code (dlist, et) =
     List.fold_left
       (fun (acc, i) d ->
         match d with
-        | D_VAL (PATTY (P_VID (val_name, VAR), _), _) ->
+        | D_VAL (PATTY (P_VID (val_name, VAR), _), _)
+        | D_REC (PATTY (P_VID (val_name, VAR), _), _) ->
             (NameMap.add val_name (IR_trans_env.Context i) acc, i + 1)
         | _ -> (acc, i))
       (NameMap.empty, 0) non_dtype_defs
@@ -466,7 +510,21 @@ let program2code (dlist, et) =
           match d with
           | D_VAL (PATTY (P_VID (val_name, VAR), _), EXPTY (def_expr, _)) ->
               IR_block.of_expr
-                { IR_trans_env.ctx_mapping; next_label_id; next_var_id = 0 }
+                {
+                  IR_trans_env.ctx_mapping;
+                  next_label_id;
+                  next_var_id = 0;
+                  self_name = None;
+                }
+                def_expr
+          | D_REC (PATTY (P_VID (val_name, VAR), _), EXPTY (def_expr, _)) ->
+              IR_block.of_expr
+                {
+                  IR_trans_env.ctx_mapping;
+                  next_label_id;
+                  next_var_id = 0;
+                  self_name = Some val_name;
+                }
                 def_expr
           | _ -> raise NotImplemented
         in
@@ -476,7 +534,12 @@ let program2code (dlist, et) =
   let (EXPTY (expr, _)) = et in
   let expr_block =
     IR_block.of_expr
-      { IR_trans_env.ctx_mapping; next_label_id; next_var_id = 0 }
+      {
+        IR_trans_env.ctx_mapping;
+        next_label_id;
+        next_var_id = 0;
+        self_name = None;
+      }
       expr
   in
   let unioned_deps =
