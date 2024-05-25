@@ -150,6 +150,105 @@ module IR_func = struct
     @ [ RETURN ]
 end
 
+module IR_jump_table = struct
+  type entry = {
+    compare_insts : IR_inst.t list;
+    next_label : label;
+    variable_mapping : IR_value.t NameMap.t;
+  }
+
+  type t = { entries : entry list; next_env : IR_trans_env.t }
+
+  open IR_inst
+  open IR_value
+
+  exception IR_pattern_invalid
+
+  let of_patterns trans_env patterns value =
+    let rec translate_match trans_env pattern value fail_label =
+      let fail_label_value = Resolved (ADDR (CADDR fail_label)) in
+      match pattern with
+      | P_WILD | P_UNIT -> (trans_env, [], NameMap.empty)
+      | P_INT v ->
+          ( trans_env,
+            [ JMPNEQ (fail_label_value, value, Resolved (INT v)) ],
+            NameMap.empty )
+      | P_BOOL v ->
+          ( trans_env,
+            [ JMPNEQ (fail_label_value, value, Resolved (BOOL v)) ],
+            NameMap.empty )
+      | P_VID (var_name, VAR) ->
+          let next_env, fresh_var = IR_trans_env.create_fresh_var trans_env in
+          ( next_env,
+            [ MOVE (fresh_var, value) ],
+            NameMap.singleton var_name fresh_var )
+      | P_VID (constructor_name, CON) ->
+          ( trans_env,
+            [
+              JMPNEQSTR
+                (fail_label_value, value, Resolved (STR constructor_name));
+            ],
+            NameMap.empty )
+      | P_VIDP ((constructor_name, CONF), PATTY (pattern', _)) ->
+          let next_env, insts, mapping =
+            translate_match trans_env pattern' (Resolved (REG tr)) fail_label
+          in
+          ( next_env,
+            [
+              PUSH (Resolved (REG tr));
+              MOVE (Resolved (REG tr), value);
+              JMPNEQSTR
+                ( fail_label_value,
+                  Resolved (REFREG (tr, 0)),
+                  Resolved (STR constructor_name) );
+              MOVE (Resolved (REG tr), Resolved (REFREG (tr, 1)));
+            ]
+            @ insts
+            @ [ POP (Resolved (REG tr)) ],
+            mapping )
+      | P_PAIR (PATTY (fst_pattern, _), PATTY (snd_pattern, _)) ->
+          let next_env, fst_insts, fst_mapping =
+            translate_match trans_env fst_pattern (Resolved (REG tr)) fail_label
+          in
+          let next_env, snd_insts, snd_mapping =
+            translate_match next_env snd_pattern (Resolved (REG tr)) fail_label
+          in
+          ( next_env,
+            [
+              PUSH (Resolved (REG tr));
+              MOVE (Resolved (REG tr), value);
+              PUSH (Resolved (REG tr));
+              MOVE (Resolved (REG tr), Resolved (REFREG (tr, 0)));
+            ]
+            @ fst_insts
+            @ [
+                POP (Resolved (REG tr));
+                MOVE (Resolved (REG tr), Resolved (REFREG (tr, 1)));
+              ]
+            @ snd_insts
+            @ [ POP (Resolved (REG tr)) ],
+            NameMap.union
+              (fun _ v1 v2 ->
+                let () = assert (v1 = v2) in
+                Some v1)
+              fst_mapping snd_mapping )
+      | _ -> raise IR_pattern_invalid
+    in
+    let entries, next_env =
+      List.fold_left
+        (fun (acc, trans_env') pattern ->
+          let next_env, next_label =
+            IR_trans_env.create_fresh_label trans_env'
+          in
+          let next_env, compare_insts, variable_mapping =
+            translate_match next_env pattern value next_label
+          in
+          (acc @ [ { compare_insts; variable_mapping; next_label } ], next_env))
+        ([], trans_env) patterns
+    in
+    { entries; next_env }
+end
+
 module IR_block = struct
   exception IR_translation_error
 
@@ -206,24 +305,74 @@ module IR_block = struct
               value;
               dependencies = NameMap.empty;
             }
-        | CON -> raise NotImplemented
-        | CONF -> raise NotImplemented)
+        | CON ->
+            {
+              next_env = trans_env;
+              insts = [];
+              value = Resolved (STR name);
+              dependencies = NameMap.empty;
+            }
+        | CONF ->
+            let constructor_label = "ctor_" ^ name in
+            {
+              next_env = trans_env;
+              insts =
+                [
+                  IR_inst.MALLOC (Resolved (REG tr), Resolved (INT 2));
+                  MOVE
+                    ( Resolved (REFREG (tr, 0)),
+                      Resolved (ADDR (CADDR constructor_label)) );
+                  MALLOC (Resolved (REFREG (tr, 1)), Resolved (INT 0));
+                ];
+              value = Resolved (REG tr);
+              dependencies =
+                NameMap.singleton constructor_label
+                  {
+                    IR_func.name = constructor_label;
+                    body_insts =
+                      [
+                        IR_inst.MALLOC (Resolved (REG tr), Resolved (INT 2));
+                        MOVE (Resolved (REFREG (tr, 0)), Resolved (STR name));
+                        MOVE
+                          (Resolved (REFREG (tr, 1)), Resolved (REFREG (bp, -3)));
+                      ];
+                    return_value = Resolved (REG tr);
+                    local_var_count = 0;
+                  };
+            })
     | E_FUN rules -> (
+        let rec collect_pattern_variables pattern =
+          match pattern with
+          | P_WILD | P_INT _ | P_BOOL _ | P_UNIT | P_VID (_, CON) ->
+              NameSet.empty
+          | P_VID (arg_name, VAR) -> NameSet.singleton arg_name
+          | P_VIDP ((_, CONF), PATTY (constructor_pattern, _)) ->
+              collect_pattern_variables constructor_pattern
+          | P_PAIR (PATTY (fst_pattern, _), PATTY (snd_pattern, _)) ->
+              NameSet.union
+                (collect_pattern_variables fst_pattern)
+                (collect_pattern_variables snd_pattern)
+          | _ -> raise IR_translation_error
+        in
         let rec collect_captures current_level_names expr =
           match expr with
           | E_VID (v, VAR) ->
               if NameSet.find_opt v current_level_names = None then
                 NameSet.singleton v
               else NameSet.empty
-          | E_FUN rules -> (
-              match rules with
-              | [
-               M_RULE (PATTY (P_VID (arg_name', VAR), _), EXPTY (body_expr', _));
-              ] ->
-                  NameSet.diff
-                    (collect_captures (NameSet.singleton arg_name') body_expr')
-                    current_level_names
-              | _ -> raise NotImplemented)
+          | E_FUN rules ->
+              NameSet.diff
+                (List.fold_left
+                   (fun acc rule ->
+                     let (M_RULE (PATTY (pattern, _), EXPTY (body_expr, _))) =
+                       rule
+                     in
+                     NameSet.union acc
+                       (collect_captures
+                          (collect_pattern_variables pattern)
+                          body_expr))
+                   NameSet.empty rules)
+                current_level_names
           | E_APP (EXPTY (abs_expr, _), EXPTY (arg_expr, _)) ->
               NameSet.union
                 (collect_captures current_level_names abs_expr)
@@ -234,13 +383,20 @@ module IR_block = struct
                 (collect_captures current_level_names snd_expr)
           | E_LET (decl, EXPTY (inner_expr, _)) -> (
               match decl with
-              | D_VAL (PATTY (P_VID (var_name, VAR), _), EXPTY (var_expr, _)) ->
+              | D_VAL (PATTY (pattern, _), EXPTY (var_expr, _)) ->
+                  NameSet.union
+                    (collect_captures current_level_names var_expr)
+                    (collect_captures
+                       (collect_pattern_variables pattern)
+                       inner_expr)
+              | D_REC (PATTY (P_VID (var_name, VAR), _), EXPTY (var_expr, _)) ->
                   NameSet.union
                     (collect_captures current_level_names var_expr)
                     (collect_captures
                        (NameSet.add var_name current_level_names)
                        inner_expr)
-              | _ -> raise NotImplemented)
+              | D_DTYPE -> NameSet.empty
+              | _ -> raise IR_translation_error)
           | _ -> NameSet.empty
         in
         match rules with
@@ -487,101 +643,148 @@ module IR_block = struct
                     Some f1)
                   var_expr_block.dependencies inner_block.dependencies;
             }
+        | D_DTYPE -> of_expr trans_env inner_expr
         | _ -> raise NotImplemented)
 end
 
 (* program2code : Mono.program -> Mach.code *)
 let program2code (dlist, et) =
-  let non_dtype_defs = List.filter (fun d -> d <> D_DTYPE) dlist in
-  let ctx_mapping, _ =
+  let rec collect_bound_var pattern =
+    match pattern with
+    | P_VID (var_name, VAR) -> NameSet.singleton var_name
+    | P_VIDP (_, PATTY (inner_pattern, _)) -> collect_bound_var inner_pattern
+    | P_PAIR (PATTY (fst_pattern, _), PATTY (snd_pattern, _)) ->
+        NameSet.union
+          (collect_bound_var fst_pattern)
+          (collect_bound_var snd_pattern)
+    | _ -> NameSet.empty
+  in
+  let bound_vars =
     List.fold_left
-      (fun (acc, i) d ->
+      (fun acc d ->
         match d with
-        | D_VAL (PATTY (P_VID (val_name, VAR), _), _)
+        | D_VAL (PATTY (pattern, _), _) ->
+            NameSet.union acc (collect_bound_var pattern)
         | D_REC (PATTY (P_VID (val_name, VAR), _), _) ->
-            (NameMap.add val_name (IR_trans_env.Context i) acc, i + 1)
-        | _ -> (acc, i))
-      (NameMap.empty, 0) non_dtype_defs
+            NameSet.add val_name acc
+        | _ -> acc)
+      NameSet.empty dlist
   in
-  let def_blocks, next_label_id =
+  let ctx_mapping =
+    NameSet.fold
+      (fun v acc ->
+        NameMap.add v (IR_trans_env.Context (NameMap.cardinal acc)) acc)
+      bound_vars NameMap.empty
+  in
+  let blocks, jump_tables, next_label_id =
     List.fold_left
-      (fun (acc, next_label_id) d ->
-        let block =
-          match d with
-          | D_VAL (PATTY (P_VID (val_name, VAR), _), EXPTY (def_expr, _)) ->
+      (fun (acc_blocks, acc_jump_tables, next_label_id) d ->
+        match d with
+        | D_VAL (PATTY (pattern, _), EXPTY (expr, _)) ->
+            let block =
               IR_block.of_expr
                 {
+                  IR_trans_env.empty with
                   IR_trans_env.ctx_mapping;
                   next_label_id;
-                  next_var_id = 0;
-                  self_name = None;
                 }
-                def_expr
-          | D_REC (PATTY (P_VID (val_name, VAR), _), EXPTY (def_expr, _)) ->
+                expr
+            in
+            let jump_table =
+              IR_jump_table.of_patterns block.IR_block.next_env [ pattern ]
+                block.IR_block.value
+            in
+            ( acc_blocks @ [ block ],
+              acc_jump_tables @ [ jump_table ],
+              jump_table.IR_jump_table.next_env.IR_trans_env.next_label_id )
+        | D_REC (PATTY (P_VID (var_name, var_is), _), EXPTY (expr, _)) ->
+            let block =
               IR_block.of_expr
                 {
+                  IR_trans_env.empty with
                   IR_trans_env.ctx_mapping;
                   next_label_id;
-                  next_var_id = 0;
-                  self_name = Some val_name;
+                  self_name = Some var_name;
                 }
-                def_expr
-          | _ -> raise NotImplemented
-        in
-        (acc @ [ block ], block.IR_block.next_env.IR_trans_env.next_label_id))
-      ([], 0) non_dtype_defs
-  in
-  let (EXPTY (expr, _)) = et in
-  let expr_block =
-    IR_block.of_expr
-      {
-        IR_trans_env.ctx_mapping;
-        next_label_id;
-        next_var_id = 0;
-        self_name = None;
-      }
-      expr
+                expr
+            in
+            let jump_table =
+              IR_jump_table.of_patterns
+                { block.IR_block.next_env with IR_trans_env.self_name = None }
+                [ P_VID (var_name, var_is) ]
+                block.IR_block.value
+            in
+            ( acc_blocks @ [ block ],
+              acc_jump_tables @ [ jump_table ],
+              jump_table.IR_jump_table.next_env.IR_trans_env.next_label_id )
+        | _ -> (acc_blocks, acc_jump_tables, next_label_id))
+      ([], [], 0) dlist
   in
   let unioned_deps =
     List.fold_left
-      (fun acc block ->
+      (fun acc b ->
         NameMap.union
           (fun _ f1 f2 ->
             let () = assert (f1 = f2) in
             Some f1)
-          acc block.IR_block.dependencies)
-      NameMap.empty (expr_block :: def_blocks)
-  in
-  let ctx_mapping_sorted =
-    List.sort
-      (fun (_, x) (_, y) -> x - y)
-      (NameMap.fold
-         (fun k v acc ->
-           match v with
-           | IR_trans_env.Context i -> (k, i) :: acc
-           | _ -> raise NotImplemented)
-         ctx_mapping [])
+          acc b.IR_block.dependencies)
+      NameMap.empty blocks
   in
   let rec repeat l n v = if n = 0 then l else repeat (v :: l) (n - 1) v in
-  [ LABEL Mach.start_label; MALLOC (LREG cp, INT (List.length non_dtype_defs)) ]
-  @ List.fold_left
-      (fun acc (name, i) ->
-        let block = List.nth def_blocks i in
-        let locals_count = block.IR_block.next_env.IR_trans_env.next_var_id in
-        acc
-        @ repeat [] locals_count (PUSH (REG zr))
-        @ List.map IR_inst.to_code block.IR_block.insts
-        @ [
-            IR_inst.to_code
-              (IR_inst.MOVE
-                 (IR_value.Resolved (REFREG (cp, i)), block.IR_block.value));
-          ]
-        @ repeat [] locals_count (POP (LREG zr)))
-      [] ctx_mapping_sorted
-  @ repeat [] expr_block.IR_block.next_env.IR_trans_env.next_var_id
-      (PUSH (REG zr))
-  @ List.map IR_inst.to_code expr_block.IR_block.insts
-  @ repeat [] expr_block.IR_block.next_env.IR_trans_env.next_var_id
-      (POP (LREG zr))
-  @ [ IR_inst.to_code (IR_inst.HALT expr_block.IR_block.value) ]
+  let def_insts, next_label_id =
+    List.fold_left2
+      (fun (acc, next_label_id) b j ->
+        let local_count = j.IR_jump_table.next_env.IR_trans_env.next_var_id in
+        let next_env, finish_label =
+          IR_trans_env.create_fresh_label
+            { IR_trans_env.empty with IR_trans_env.next_label_id }
+        in
+        let entry = List.hd j.IR_jump_table.entries in
+        ( acc
+          @ repeat [] local_count (IR_inst.PUSH (Resolved (REG zr)))
+          @ b.IR_block.insts @ entry.IR_jump_table.compare_insts
+          @ NameMap.fold
+              (fun name v acc ->
+                match NameMap.find_opt name ctx_mapping with
+                | Some (Context i) ->
+                    acc
+                    @ [ IR_inst.MOVE (IR_value.Resolved (REFREG (cp, i)), v) ]
+                | _ -> acc)
+              entry.IR_jump_table.variable_mapping []
+          @ repeat [] local_count (IR_inst.POP (Resolved (REG zr)))
+          @ [
+              JUMP (Resolved (ADDR (CADDR finish_label)));
+              LABEL entry.next_label;
+              EXCEPTION;
+              LABEL finish_label;
+            ],
+          next_env.IR_trans_env.next_label_id ))
+      ([], next_label_id) blocks jump_tables
+  in
+  let (EXPTY (expr, _)) = et in
+  let expr_block =
+    IR_block.of_expr { IR_trans_env.empty with ctx_mapping; next_label_id } expr
+  in
+  let expr_insts =
+    repeat [] expr_block.IR_block.next_env.next_var_id
+      (IR_inst.PUSH (Resolved (REG zr)))
+    @ expr_block.insts
+    @ repeat [] expr_block.IR_block.next_env.next_var_id
+        (IR_inst.POP (Resolved (REG zr)))
+    @ [ HALT expr_block.value ]
+  in
+  let unioned_deps =
+    NameMap.union
+      (fun _ f1 f2 ->
+        let () = assert (f1 = f2) in
+        Some f1)
+      unioned_deps expr_block.dependencies
+  in
+  List.map IR_inst.to_code
+    ([
+       IR_inst.LABEL Mach.start_label;
+       IR_inst.MALLOC
+         (Resolved (REG cp), Resolved (INT (NameSet.cardinal bound_vars)));
+     ]
+    @ def_insts @ expr_insts)
   @ NameMap.fold (fun _ func acc -> acc @ IR_func.to_code func) unioned_deps []
