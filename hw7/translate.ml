@@ -655,6 +655,7 @@ module IR_block = struct
             let inner_block = of_expr next_env inner_expr in
             {
               inner_block with
+              next_env = { next_env with ctx_mapping = trans_env.ctx_mapping };
               insts =
                 var_expr_block.insts
                 @ [ MOVE (fresh_var, var_expr_block.value) ]
