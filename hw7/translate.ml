@@ -162,6 +162,16 @@ module IR_jump_table = struct
   open IR_inst
   open IR_value
 
+  let rec collect_bound_var pattern =
+    match pattern with
+    | P_VID (var_name, VAR) -> NameSet.singleton var_name
+    | P_VIDP (_, PATTY (inner_pattern, _)) -> collect_bound_var inner_pattern
+    | P_PAIR (PATTY (fst_pattern, _), PATTY (snd_pattern, _)) ->
+        NameSet.union
+          (collect_bound_var fst_pattern)
+          (collect_bound_var snd_pattern)
+    | _ -> NameSet.empty
+
   exception IR_pattern_invalid
 
   let of_patterns trans_env patterns value =
@@ -649,22 +659,12 @@ end
 
 (* program2code : Mono.program -> Mach.code *)
 let program2code (dlist, et) =
-  let rec collect_bound_var pattern =
-    match pattern with
-    | P_VID (var_name, VAR) -> NameSet.singleton var_name
-    | P_VIDP (_, PATTY (inner_pattern, _)) -> collect_bound_var inner_pattern
-    | P_PAIR (PATTY (fst_pattern, _), PATTY (snd_pattern, _)) ->
-        NameSet.union
-          (collect_bound_var fst_pattern)
-          (collect_bound_var snd_pattern)
-    | _ -> NameSet.empty
-  in
   let bound_vars =
     List.fold_left
       (fun acc d ->
         match d with
         | D_VAL (PATTY (pattern, _), _) ->
-            NameSet.union acc (collect_bound_var pattern)
+            NameSet.union acc (IR_jump_table.collect_bound_var pattern)
         | D_REC (PATTY (P_VID (val_name, VAR), _), _) ->
             NameSet.add val_name acc
         | _ -> acc)
