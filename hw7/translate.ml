@@ -203,46 +203,42 @@ module IR_block = struct
         | CON -> raise NotImplemented
         | CONF -> raise NotImplemented)
     | E_FUN rules -> (
+        let rec collect_captures current_level_names expr =
+          match expr with
+          | E_VID (v, VAR) ->
+              if NameSet.find_opt v current_level_names = None then
+                NameSet.singleton v
+              else NameSet.empty
+          | E_FUN rules -> (
+              match rules with
+              | [
+               M_RULE (PATTY (P_VID (arg_name', VAR), _), EXPTY (body_expr', _));
+              ] ->
+                  NameSet.diff
+                    (collect_captures (NameSet.singleton arg_name') body_expr')
+                    current_level_names
+              | _ -> raise NotImplemented)
+          | E_APP (EXPTY (abs_expr, _), EXPTY (arg_expr, _)) ->
+              NameSet.union
+                (collect_captures current_level_names abs_expr)
+                (collect_captures current_level_names arg_expr)
+          | E_PAIR (EXPTY (fst_expr, _), EXPTY (snd_expr, _)) ->
+              NameSet.union
+                (collect_captures current_level_names fst_expr)
+                (collect_captures current_level_names snd_expr)
+          | E_LET (decl, EXPTY (inner_expr, _)) -> (
+              match decl with
+              | D_VAL (PATTY (P_VID (var_name, VAR), _), EXPTY (var_expr, _)) ->
+                  NameSet.union
+                    (collect_captures current_level_names var_expr)
+                    (collect_captures
+                       (NameSet.add var_name current_level_names)
+                       inner_expr)
+              | _ -> raise NotImplemented)
+          | _ -> NameSet.empty
+        in
         match rules with
         | [ M_RULE (PATTY (P_VID (arg_name, VAR), _), EXPTY (body_expr, _)) ] ->
-            let rec collect_captures current_level_names expr =
-              match expr with
-              | E_VID (v, VAR) ->
-                  if NameSet.find_opt v current_level_names = None then
-                    NameSet.singleton v
-                  else NameSet.empty
-              | E_FUN rules -> (
-                  match rules with
-                  | [
-                   M_RULE
-                     (PATTY (P_VID (arg_name', VAR), _), EXPTY (body_expr', _));
-                  ] ->
-                      NameSet.diff
-                        (collect_captures
-                           (NameSet.singleton arg_name')
-                           body_expr')
-                        current_level_names
-                  | _ -> raise NotImplemented)
-              | E_APP (EXPTY (abs_expr, _), EXPTY (arg_expr, _)) ->
-                  NameSet.union
-                    (collect_captures current_level_names abs_expr)
-                    (collect_captures current_level_names arg_expr)
-              | E_PAIR (EXPTY (fst_expr, _), EXPTY (snd_expr, _)) ->
-                  NameSet.union
-                    (collect_captures current_level_names fst_expr)
-                    (collect_captures current_level_names snd_expr)
-              | E_LET (decl, EXPTY (inner_expr, _)) -> (
-                  match decl with
-                  | D_VAL (PATTY (P_VID (var_name, VAR), _), EXPTY (var_expr, _))
-                    ->
-                      NameSet.union
-                        (collect_captures current_level_names var_expr)
-                        (collect_captures
-                           (NameSet.add var_name current_level_names)
-                           inner_expr)
-                  | _ -> raise NotImplemented)
-              | _ -> NameSet.empty
-            in
             let captured_names =
               collect_captures (NameSet.singleton arg_name) body_expr
             in
