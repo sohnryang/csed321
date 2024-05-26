@@ -196,50 +196,56 @@ module IR_jump_table = struct
             [ MOVE (fresh_var, value) ],
             NameMap.singleton var_name fresh_var )
       | P_VID (constructor_name, CON) ->
-          ( trans_env,
+          let next_env, fresh_var = IR_trans_env.create_fresh_var trans_env in
+          ( next_env,
             [
+              PUSH (Resolved (REG tr));
+              MOVE (Resolved (REG tr), value);
+              MOVE (fresh_var, Resolved (REFREG (tr, 0)));
+              POP (Resolved (REG tr));
               JMPNEQSTR
-                (fail_label_value, value, Resolved (STR constructor_name));
+                (fail_label_value, fresh_var, Resolved (STR constructor_name));
             ],
             NameMap.empty )
       | P_VIDP ((constructor_name, CONF), PATTY (pattern', _)) ->
+          let next_env, arg_var = IR_trans_env.create_fresh_var trans_env in
           let next_env, insts, mapping =
-            translate_match trans_env pattern' (Resolved (REG tr)) fail_label
+            translate_match next_env pattern' arg_var fail_label
           in
+          let next_env, label_var = IR_trans_env.create_fresh_var next_env in
           ( next_env,
             [
               PUSH (Resolved (REG tr));
               MOVE (Resolved (REG tr), value);
+              MOVE (label_var, Resolved (REFREG (tr, 0)));
+              POP (Resolved (REG tr));
               JMPNEQSTR
-                ( fail_label_value,
-                  Resolved (REFREG (tr, 0)),
-                  Resolved (STR constructor_name) );
-              MOVE (Resolved (REG tr), Resolved (REFREG (tr, 1)));
+                (fail_label_value, label_var, Resolved (STR constructor_name));
+              PUSH (Resolved (REG tr));
+              MOVE (Resolved (REG tr), value);
+              MOVE (arg_var, Resolved (REFREG (tr, 1)));
+              POP (Resolved (REG tr));
             ]
-            @ insts
-            @ [ POP (Resolved (REG tr)) ],
+            @ insts,
             mapping )
       | P_PAIR (PATTY (fst_pattern, _), PATTY (snd_pattern, _)) ->
+          let next_env, fst_var = IR_trans_env.create_fresh_var trans_env in
           let next_env, fst_insts, fst_mapping =
-            translate_match trans_env fst_pattern (Resolved (REG tr)) fail_label
+            translate_match next_env fst_pattern fst_var fail_label
           in
+          let next_env, snd_var = IR_trans_env.create_fresh_var next_env in
           let next_env, snd_insts, snd_mapping =
-            translate_match next_env snd_pattern (Resolved (REG tr)) fail_label
+            translate_match next_env snd_pattern snd_var fail_label
           in
           ( next_env,
             [
               PUSH (Resolved (REG tr));
               MOVE (Resolved (REG tr), value);
-              PUSH (Resolved (REG tr));
-              MOVE (Resolved (REG tr), Resolved (REFREG (tr, 0)));
+              MOVE (fst_var, Resolved (REFREG (tr, 0)));
+              MOVE (snd_var, Resolved (REFREG (tr, 1)));
+              POP (Resolved (REG tr));
             ]
-            @ fst_insts
-            @ [
-                POP (Resolved (REG tr));
-                MOVE (Resolved (REG tr), Resolved (REFREG (tr, 1)));
-              ]
-            @ snd_insts
-            @ [ POP (Resolved (REG tr)) ],
+            @ fst_insts @ snd_insts,
             NameMap.union
               (fun _ v1 v2 ->
                 let () = assert (v1 = v2) in
@@ -319,37 +325,54 @@ module IR_block = struct
               dependencies = NameMap.empty;
             }
         | CON ->
+            let next_env, fresh_var = IR_trans_env.create_fresh_var trans_env in
             {
-              next_env = trans_env;
-              insts = [];
-              value = Resolved (STR name);
+              next_env;
+              insts =
+                [
+                  PUSH (Resolved (REG tr));
+                  MALLOC (Resolved (REG tr), Resolved (INT 1));
+                  MOVE (Resolved (REFREG (tr, 0)), Resolved (STR name));
+                  MOVE (fresh_var, Resolved (REG tr));
+                  POP (Resolved (REG tr));
+                ];
+              value = fresh_var;
               dependencies = NameMap.empty;
             }
         | CONF ->
+            let next_env, constructor_fn_var =
+              IR_trans_env.create_fresh_var trans_env
+            in
             let constructor_label = "ctor_" ^ name in
             {
-              next_env = trans_env;
+              next_env;
               insts =
                 [
-                  IR_inst.MALLOC (Resolved (REG tr), Resolved (INT 2));
+                  PUSH (Resolved (REG tr));
+                  MALLOC (Resolved (REG tr), Resolved (INT 2));
                   MOVE
                     ( Resolved (REFREG (tr, 0)),
                       Resolved (ADDR (CADDR constructor_label)) );
                   MALLOC (Resolved (REFREG (tr, 1)), Resolved (INT 0));
+                  MOVE (constructor_fn_var, Resolved (REG tr));
+                  POP (Resolved (REG tr));
                 ];
-              value = Resolved (REG tr);
+              value = constructor_fn_var;
               dependencies =
                 NameMap.singleton constructor_label
                   {
                     IR_func.name = constructor_label;
                     body_insts =
                       [
-                        IR_inst.MALLOC (Resolved (REG tr), Resolved (INT 2));
+                        PUSH (Resolved (REG tr));
+                        MALLOC (Resolved (REG tr), Resolved (INT 2));
                         MOVE (Resolved (REFREG (tr, 0)), Resolved (STR name));
                         MOVE
                           (Resolved (REFREG (tr, 1)), Resolved (REFREG (bp, -3)));
+                        MOVE (Resolved (REG ax), Resolved (REG tr));
+                        POP (Resolved (REG tr));
                       ];
-                    return_value = Resolved (REG tr);
+                    return_value = Resolved (REG ax);
                     local_var_count = 0;
                   };
             })
@@ -520,14 +543,16 @@ module IR_block = struct
               | _ -> acc)
             body_ctx_mapping []
         in
-        let next_env =
-          { next_env with next_label_id = body_trans_env.next_label_id }
+        let next_env, closure_var =
+          IR_trans_env.create_fresh_var
+            { next_env with next_label_id = body_trans_env.next_label_id }
         in
         {
           next_env;
           insts =
             [
-              IR_inst.MALLOC (Resolved (REG tr), Resolved (INT 2));
+              PUSH (Resolved (REG tr));
+              MALLOC (Resolved (REG tr), Resolved (INT 2));
               MOVE
                 ( Resolved (REFREG (tr, 0)),
                   Resolved (ADDR (CADDR function_label)) );
@@ -538,8 +563,8 @@ module IR_block = struct
               MOVE (Resolved (REG tr), Resolved (REFREG (tr, 1)));
             ]
             @ capturing_copy_insts
-            @ [ IR_inst.POP (Resolved (REG tr)) ];
-          value = IR_value.Resolved (REG tr);
+            @ [ POP closure_var; POP (Resolved (REG tr)) ];
+          value = closure_var;
           dependencies =
             NameMap.add function_label func
               (List.fold_left
@@ -563,6 +588,7 @@ module IR_block = struct
               insts =
                 arg_block.insts
                 @ [
+                    PUSH (Resolved (REG tr));
                     MOVE (Resolved (REG tr), arg_block.value);
                     (match abs_expr with
                     | E_PLUS ->
@@ -581,6 +607,7 @@ module IR_block = struct
                             Resolved (REFREG (tr, 0)),
                             Resolved (REFREG (tr, 1)) )
                     | _ -> raise IR_translation_error);
+                    POP (Resolved (REG tr));
                   ];
               value = fresh_var;
               dependencies = arg_block.dependencies;
@@ -596,6 +623,7 @@ module IR_block = struct
               insts =
                 arg_block.insts
                 @ [
+                    PUSH (Resolved (REG tr));
                     MOVE (Resolved (REG tr), arg_block.value);
                     MOVE (fresh_var, Resolved (BOOL default_value));
                     JMPNEQ
@@ -604,6 +632,7 @@ module IR_block = struct
                         Resolved (REFREG (tr, 1)) );
                     MOVE (fresh_var, Resolved (BOOL (default_value = false)));
                     LABEL fresh_label;
+                    POP (Resolved (REG tr));
                   ];
               value = fresh_var;
               dependencies = arg_block.dependencies;
@@ -614,7 +643,11 @@ module IR_block = struct
               next_env = abs_block.next_env;
               insts =
                 arg_block.insts
-                @ [ PUSH (IR_value.Resolved (REG cp)); PUSH arg_block.value ]
+                @ [
+                    PUSH (Resolved (REG tr));
+                    PUSH (IR_value.Resolved (REG cp));
+                    PUSH arg_block.value;
+                  ]
                 @ abs_block.insts
                 @ [
                     MOVE (IR_value.Resolved (REG tr), abs_block.value);
@@ -624,6 +657,7 @@ module IR_block = struct
                     CALL (IR_value.Resolved (REFREG (tr, 0)));
                     POP (IR_value.Resolved (REG zr));
                     POP (IR_value.Resolved (REG cp));
+                    POP (Resolved (REG tr));
                   ];
               value = IR_value.Resolved (REG ax);
               dependencies =
@@ -634,19 +668,23 @@ module IR_block = struct
                   abs_block.dependencies arg_block.dependencies;
             })
     | E_PAIR (EXPTY (fst_expr, _), EXPTY (snd_expr, _)) ->
-        let fst_block = of_expr trans_env fst_expr in
+        let next_env, pair_var = IR_trans_env.create_fresh_var trans_env in
+        let fst_block = of_expr next_env fst_expr in
         let snd_block = of_expr fst_block.next_env snd_expr in
         {
           next_env = snd_block.next_env;
           insts =
-            fst_block.insts @ [ PUSH fst_block.value ] @ snd_block.insts
+            [ PUSH (Resolved (REG tr)) ]
+            @ fst_block.insts @ [ PUSH fst_block.value ] @ snd_block.insts
             @ [
                 PUSH snd_block.value;
                 MALLOC (Resolved (REG tr), Resolved (INT 2));
                 POP (Resolved (REFREG (tr, 1)));
                 POP (Resolved (REFREG (tr, 0)));
+                MOVE (pair_var, Resolved (REG tr));
+                POP (Resolved (REG tr));
               ];
-          value = Resolved (REG tr);
+          value = pair_var;
           dependencies =
             NameMap.union
               (fun _ f1 f2 ->
