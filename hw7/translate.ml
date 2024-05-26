@@ -607,6 +607,7 @@ module IR_block = struct
                             Resolved (REFREG (tr, 0)),
                             Resolved (REFREG (tr, 1)) )
                     | _ -> raise IR_translation_error);
+                    FREE (Resolved (REG tr));
                     POP (Resolved (REG tr));
                   ];
               value = fresh_var;
@@ -632,6 +633,7 @@ module IR_block = struct
                         Resolved (REFREG (tr, 1)) );
                     MOVE (fresh_var, Resolved (BOOL (default_value = false)));
                     LABEL fresh_label;
+                    FREE (Resolved (REG tr));
                     POP (Resolved (REG tr));
                   ];
               value = fresh_var;
