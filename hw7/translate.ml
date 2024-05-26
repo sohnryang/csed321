@@ -184,9 +184,12 @@ module IR_jump_table = struct
             [ JMPNEQ (fail_label_value, value, Resolved (INT v)) ],
             NameMap.empty )
       | P_BOOL v ->
-          ( trans_env,
-            [ JMPNEQ (fail_label_value, value, Resolved (BOOL v)) ],
-            NameMap.empty )
+          if v then
+            let next_env, fresh_var = IR_trans_env.create_fresh_var trans_env in
+            ( next_env,
+              [ NOT (fresh_var, value); JMPTRUE (fail_label_value, fresh_var) ],
+              NameMap.empty )
+          else (trans_env, [ JMPTRUE (fail_label_value, value) ], NameMap.empty)
       | P_VID (var_name, VAR) ->
           let next_env, fresh_var = IR_trans_env.create_fresh_var trans_env in
           ( next_env,
@@ -350,7 +353,7 @@ module IR_block = struct
                     local_var_count = 0;
                   };
             })
-    | E_FUN rules -> (
+    | E_FUN rules ->
         let rec collect_pattern_variables pattern =
           match pattern with
           | P_WILD | P_INT _ | P_BOOL _ | P_UNIT | P_VID (_, CON) ->
@@ -409,85 +412,145 @@ module IR_block = struct
               | _ -> raise IR_translation_error)
           | _ -> NameSet.empty
         in
-        match rules with
-        | [ M_RULE (PATTY (P_VID (arg_name, VAR), _), EXPTY (body_expr, _)) ] ->
-            let captured_names =
-              collect_captures (NameSet.singleton arg_name) body_expr
-            in
-            let body_ctx_mapping =
-              NameMap.add arg_name IR_trans_env.Arg
-                (NameSet.fold
-                   (fun name mapping ->
-                     NameMap.add name
-                       (IR_trans_env.Context (NameMap.cardinal mapping))
-                       mapping)
-                   captured_names NameMap.empty)
-            in
-            let body_trans_env =
-              {
-                IR_trans_env.empty with
-                ctx_mapping = body_ctx_mapping;
-                next_label_id = trans_env.next_label_id;
-              }
-            in
-            let body_translated = of_expr body_trans_env body_expr in
-            let next_env, fresh_label =
-              IR_trans_env.create_fresh_label
+        let next_env, function_label =
+          IR_trans_env.create_fresh_label trans_env
+        in
+        let next_env, finish_label = IR_trans_env.create_fresh_label next_env in
+        let body_trans_env =
+          { IR_trans_env.empty with next_label_id = next_env.next_label_id }
+        in
+        let jump_table =
+          IR_jump_table.of_patterns body_trans_env
+            (List.map
+               (fun r ->
+                 let (M_RULE (PATTY (pattern, _), _)) = r in
+                 pattern)
+               rules)
+            (Resolved (REFREG (bp, -3)))
+        in
+        let body_trans_env = jump_table.next_env in
+        let body_exprs =
+          List.map
+            (fun r ->
+              let (M_RULE (_, EXPTY (expr, _))) = r in
+              expr)
+            rules
+        in
+        let captured_names =
+          List.fold_left2
+            (fun acc expr entry ->
+              let bound_vars =
+                NameMap.fold
+                  (fun var_name _ acc -> NameSet.add var_name acc)
+                  entry.IR_jump_table.variable_mapping NameSet.empty
+              in
+              NameSet.union acc (collect_captures bound_vars expr))
+            NameSet.empty body_exprs jump_table.entries
+        in
+        let body_ctx_mapping =
+          NameSet.fold
+            (fun name mapping ->
+              NameMap.add name
+                (IR_trans_env.Context (NameMap.cardinal mapping))
+                mapping)
+            captured_names NameMap.empty
+        in
+        let body_blocks, body_trans_env =
+          List.fold_left2
+            (fun (acc, body_trans_env) expr entry ->
+              let ctx_mapping =
+                NameMap.union
+                  (fun _ f1 f2 -> Some f2)
+                  body_ctx_mapping
+                  (NameMap.map
+                     (fun v -> IR_trans_env.Local v)
+                     entry.IR_jump_table.variable_mapping)
+              in
+              let trans_env = { body_trans_env with ctx_mapping } in
+              let block = of_expr trans_env expr in
+              let block =
                 {
-                  trans_env with
-                  next_label_id = body_translated.next_env.next_label_id;
+                  block with
+                  insts =
+                    entry.compare_insts @ block.insts
+                    @ [
+                        MOVE (Resolved (REG ax), block.value);
+                        JUMP (Resolved (ADDR (CADDR finish_label)));
+                        LABEL entry.next_label;
+                      ];
                 }
-            in
-            let capturing_copy_insts =
-              NameMap.fold
-                (fun n l acc ->
-                  match (l, NameMap.find_opt n trans_env.ctx_mapping) with
-                  | IR_trans_env.Context inner_id, Some outer ->
-                      let outer_value =
-                        if trans_env.self_name = Some n then
-                          Resolved (REFREG (sp, -1))
-                        else
-                          match outer with
-                          | Context id -> Resolved (REFREG (cp, id))
-                          | Arg -> Resolved (REFREG (bp, -3))
-                          | Local v -> v
-                      in
-                      acc
-                      @ [
-                          IR_inst.MOVE
-                            (Resolved (REFREG (tr, inner_id)), outer_value);
-                        ]
-                  | _ -> acc)
-                body_ctx_mapping []
-            in
-            {
-              next_env;
-              insts =
-                [
-                  IR_inst.MALLOC (Resolved (REG tr), Resolved (INT 2));
-                  MOVE
-                    ( Resolved (REFREG (tr, 0)),
-                      Resolved (ADDR (CADDR fresh_label)) );
-                  MALLOC
-                    ( Resolved (REFREG (tr, 1)),
-                      Resolved (INT (List.length capturing_copy_insts)) );
-                  PUSH (Resolved (REG tr));
-                  MOVE (Resolved (REG tr), Resolved (REFREG (tr, 1)));
-                ]
-                @ capturing_copy_insts
-                @ [ IR_inst.POP (Resolved (REG tr)) ];
-              value = IR_value.Resolved (REG tr);
-              dependencies =
-                NameMap.add fresh_label
-                  {
-                    IR_func.name = fresh_label;
-                    body_insts = body_translated.insts;
-                    return_value = body_translated.value;
-                    local_var_count = body_translated.next_env.next_var_id;
-                  }
-                  body_translated.dependencies;
-            }
-        | _ -> raise NotImplemented)
+              in
+              ( acc @ [ block ],
+                {
+                  body_trans_env with
+                  next_var_id = block.next_env.next_var_id;
+                  next_label_id = block.next_env.next_label_id;
+                } ))
+            ([], body_trans_env) body_exprs jump_table.entries
+        in
+        let func =
+          {
+            IR_func.name = function_label;
+            body_insts =
+              List.fold_left (fun acc block -> acc @ block.insts) [] body_blocks
+              @ [ EXCEPTION; LABEL finish_label ];
+            return_value = Resolved (REG ax);
+            local_var_count = body_trans_env.next_label_id;
+          }
+        in
+        let capturing_copy_insts =
+          NameMap.fold
+            (fun n l acc ->
+              match (l, NameMap.find_opt n trans_env.ctx_mapping) with
+              | IR_trans_env.Context inner_id, Some outer ->
+                  let outer_value =
+                    if trans_env.self_name = Some n then
+                      Resolved (REFREG (sp, -1))
+                    else
+                      match outer with
+                      | Context id -> Resolved (REFREG (cp, id))
+                      | Arg -> Resolved (REFREG (bp, -3))
+                      | Local v -> v
+                  in
+                  acc
+                  @ [
+                      IR_inst.MOVE
+                        (Resolved (REFREG (tr, inner_id)), outer_value);
+                    ]
+              | _ -> acc)
+            body_ctx_mapping []
+        in
+        let next_env =
+          { next_env with next_label_id = body_trans_env.next_label_id }
+        in
+        {
+          next_env;
+          insts =
+            [
+              IR_inst.MALLOC (Resolved (REG tr), Resolved (INT 2));
+              MOVE
+                ( Resolved (REFREG (tr, 0)),
+                  Resolved (ADDR (CADDR function_label)) );
+              MALLOC
+                ( Resolved (REFREG (tr, 1)),
+                  Resolved (INT (List.length capturing_copy_insts)) );
+              PUSH (Resolved (REG tr));
+              MOVE (Resolved (REG tr), Resolved (REFREG (tr, 1)));
+            ]
+            @ capturing_copy_insts
+            @ [ IR_inst.POP (Resolved (REG tr)) ];
+          value = IR_value.Resolved (REG tr);
+          dependencies =
+            NameMap.add function_label func
+              (List.fold_left
+                 (fun acc b ->
+                   NameMap.union
+                     (fun name f1 f2 ->
+                       let () = assert (f1 = f2) in
+                       Some f2)
+                     acc b.dependencies)
+                 NameMap.empty body_blocks);
+        }
     | E_APP (EXPTY (abs_expr, _), EXPTY (arg_expr, _)) -> (
         let arg_block = of_expr trans_env arg_expr in
         match abs_expr with
