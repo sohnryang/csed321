@@ -671,18 +671,22 @@ module IR_block = struct
             })
     | E_PAIR (EXPTY (fst_expr, _), EXPTY (snd_expr, _)) ->
         let next_env, pair_var = IR_trans_env.create_fresh_var trans_env in
+        let next_env, fst_var = IR_trans_env.create_fresh_var next_env in
+        let next_env, snd_var = IR_trans_env.create_fresh_var next_env in
         let fst_block = of_expr next_env fst_expr in
         let snd_block = of_expr fst_block.next_env snd_expr in
         {
           next_env = snd_block.next_env;
           insts =
-            [ PUSH (Resolved (REG tr)) ]
-            @ fst_block.insts @ [ PUSH fst_block.value ] @ snd_block.insts
+            fst_block.insts
+            @ [ MOVE (fst_var, fst_block.value) ]
+            @ snd_block.insts
             @ [
-                PUSH snd_block.value;
+                MOVE (snd_var, snd_block.value);
+                PUSH (Resolved (REG tr));
                 MALLOC (Resolved (REG tr), Resolved (INT 2));
-                POP (Resolved (REFREG (tr, 1)));
-                POP (Resolved (REFREG (tr, 0)));
+                MOVE (Resolved (REFREG (tr, 0)), fst_var);
+                MOVE (Resolved (REFREG (tr, 1)), snd_var);
                 MOVE (pair_var, Resolved (REG tr));
                 POP (Resolved (REG tr));
               ];
